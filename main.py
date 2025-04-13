@@ -10,6 +10,7 @@ import trainer as tt
 import predictor as pt
 import nltk
 nltk.download('punkt')
+nltk.download('punkt_tab')
 
 # --- Configuration ---
 # Data paths
