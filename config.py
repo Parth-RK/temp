@@ -22,7 +22,7 @@ PREPROCESSOR_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "preprocessor_config.json")
 RESULTS_PLOT_PATH = os.path.join(ARTIFACTS_DIR, "training_plots.png")
 
 # --- Preprocessing Parameters ---
-MAX_LENGTH = 40  # Maximum sequence length *before* adding SOS/EOS
+MAX_LENGTH = 128  # Maximum sequence length
 MIN_FREQ = 2     # Minimum frequency for words to be included in vocabulary
 
 # --- Special Tokens ---
@@ -44,7 +44,7 @@ MODEL_TYPE = 'LSTM'
 # Common
 N_CLASS = 6        # Number of emotion classes
 # LSTM Specific
-EMBEDDING_DIM = 128 # Increased embedding dim
+EMBEDDING_DIM = 300 # Increased embedding dim
 HIDDEN_DIM = 256   # Increased hidden dim
 N_LAYERS = 2       # Number of LSTM layers
 # ANN Specific (Input size calculation needs review if not using embeddings)
@@ -63,3 +63,6 @@ INT_TO_LABEL = {
     0: 'sadness', 1: 'joy', 2: 'love', 3: 'anger', 4: 'fear', 5: 'surprise'
 }
 LABEL_TO_INT = {v: k for k, v in INT_TO_LABEL.items()}
+
+# --- NLP Configuration ---
+SPACY_MODEL = "en_core_web_sm"  # Options: "en_core_web_sm", "en_core_web_md", "en_core_web_lg"

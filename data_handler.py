@@ -25,6 +25,9 @@ UNK_IDX = config.UNK_IDX
 SOS_IDX = config.SOS_IDX
 EOS_IDX = config.EOS_IDX
 
+# --- Get spaCy model name from config ---
+SPACY_MODEL = config.SPACY_MODEL
+
 class Vocabulary:
     """Manual Vocabulary Class"""
     def __init__(self, freq_threshold, max_size=None):
@@ -99,13 +102,13 @@ class TextPreprocessor:
     def _lazy_load_spacy(self):
         """Loads spacy model only when needed."""
         if self.nlp is None:
-            print("Loading spaCy model 'en_core_web_sm'...")
+            print(f"Loading spaCy model '{SPACY_MODEL}'...")
             try:
-                self.nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"]) # Faster loading
+                self.nlp = spacy.load(SPACY_MODEL, disable=["parser", "ner"]) # Faster loading
             except OSError:
-                print("Spacy model 'en_core_web_sm' not found. Downloading...")
-                spacy.cli.download("en_core_web_sm")
-                self.nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+                print(f"Spacy model '{SPACY_MODEL}' not found. Downloading...")
+                spacy.cli.download(SPACY_MODEL)
+                self.nlp = spacy.load(SPACY_MODEL, disable=["parser", "ner"])
             print("spaCy model loaded.")
 
     def clean_and_tokenize(self, text):
