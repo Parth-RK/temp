@@ -1,8 +1,3 @@
-# engine.py
-"""
-Contains functions for training, evaluation, plotting, and saving/loading checkpoints.
-(TorchText Legacy Independent Version - Flexible Classes)
-"""
 import torch
 import torch.nn as nn
 import pandas as pd
@@ -10,16 +5,14 @@ import matplotlib.pylab as plt
 import seaborn as sns
 import os
 from tqdm import tqdm
-import config # For device, paths
+import config
 
 def accuracy_fn(y_true, y_pred):
-    """Calculates accuracy between true labels and predicted labels."""
     correct = torch.eq(y_true, y_pred).sum().item()
     acc = (correct / len(y_pred)) * 100
     return acc
 
 def evaluate(model, data_loader, criterion, device):
-    """Evaluates the model on a given dataset."""
     print("Evaluating...")
     total_loss, total_acc = 0, 0
     model.eval()
@@ -40,7 +33,6 @@ def evaluate(model, data_loader, criterion, device):
     return avg_acc, avg_loss
 
 def trainer(model, train_loader, optimizer, criterion, epochs, device, val_loader=None, model_save_path=None):
-    """Trains the model."""
     history = {"train_loss": [], "train_acc": [], "epoch": []}
     if val_loader:
         history["val_loss"] = []
@@ -63,7 +55,6 @@ def trainer(model, train_loader, optimizer, criterion, epochs, device, val_loade
 
             optimizer.zero_grad()
             loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Optional clip
             optimizer.step()
 
             y_pred_class = torch.softmax(y_pred_logits, dim=1).argmax(dim=1)
@@ -73,7 +64,7 @@ def trainer(model, train_loader, optimizer, criterion, epochs, device, val_loade
             progress_bar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{batch_acc:.2f}'})
 
         print(f"\n--- Evaluating Epoch {epoch} ---")
-        train_acc, train_loss = evaluate(model, train_loader, criterion, device) # Evaluate on train set end of epoch
+        train_acc, train_loss = evaluate(model, train_loader, criterion, device)
         history["train_loss"].append(train_loss)
         history["train_acc"].append(train_acc)
         history["epoch"].append(epoch)
@@ -103,21 +94,17 @@ def trainer(model, train_loader, optimizer, criterion, epochs, device, val_loade
 
 
 def save_checkpoint(model, optimizer, epoch, filepath):
-    """Saves model and optimizer state."""
     print(f"Saving checkpoint to {filepath}...")
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        # Optionally save model hyperparameters needed for reload
-        # 'n_class': model.fc.out_features # Example if needed
     }
     torch.save(checkpoint, filepath)
     print("Checkpoint saved.")
 
 def load_checkpoint(filepath, model, optimizer=None, device='cpu'):
-    """Loads model and optimizer state from a checkpoint."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Checkpoint file not found at {filepath}")
     print(f"Loading checkpoint from {filepath}...")
@@ -137,16 +124,13 @@ def load_checkpoint(filepath, model, optimizer=None, device='cpu'):
     model.to(device)
     return checkpoint.get('epoch', 0)
 
-# save_final_model, load_final_model, plot_history remain unchanged but are needed
 def save_final_model(model, filepath):
-    """Saves only the final model state_dict."""
     print(f"Saving final model state_dict to {filepath}...")
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     torch.save(model.state_dict(), filepath)
     print("Final model saved.")
 
 def load_final_model(model, filepath, device='cpu'):
-    """Loads the final model state_dict."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Model file not found at {filepath}")
     print(f"Loading final model state_dict from {filepath}...")
@@ -156,7 +140,6 @@ def load_final_model(model, filepath, device='cpu'):
     print("Final model loaded.")
 
 def plot_history(df, save_path=None):
-    """Plots training and validation loss and accuracy."""
     plt.figure(figsize=(12, 6))
     sns.set_style("whitegrid")
 
