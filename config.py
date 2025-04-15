@@ -27,9 +27,9 @@ EOS_IDX = 3
 
 MODEL_TYPE = 'LSTM'
 
-EMBEDDING_DIM = 512
+EMBEDDING_DIM = 256
 HIDDEN_DIM = 256
-N_LAYERS = 4
+N_LAYERS = 2
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 32
@@ -40,6 +40,6 @@ SHUFFLE_DATA = True
 SPACY_MODEL = "en_core_web_md"
 
 TOP_K_PREDICTIONS = 3
-NUM_WORKERS = 1
+NUM_WORKERS = 4
 DROPOUT_PROB = 0.3
 WEIGHT_DECAY = 1e-5

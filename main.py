@@ -87,7 +87,7 @@ def run_training():
         )
 
     print("\nInitializing TextPreprocessor...")
-    text_preprocessor = data_handler.TextPreprocessor(use_stopwords=False)
+    text_preprocessor = data_handler.TextPreprocessor(use_stopwords=True, use_lemmatization=True)
 
     print("Preprocessing training data (for sequence length analysis)...")
     train_tokens_list = text_preprocessor.preprocess_dataframe(train_df)
