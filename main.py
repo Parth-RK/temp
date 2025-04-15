@@ -20,25 +20,37 @@ import engine
 PAD_IDX = config.PAD_IDX
 
 def run_training():
-    """Executes the full training pipeline."""
+    """Main function to run the training process."""
     print("--- Starting Emotion Classification Training (No TorchText Legacy) ---")
     print(f"Using device: {config.DEVICE}")
     print(f"Selected model type: {config.MODEL_TYPE}")
 
-    # --- Setup ---
-    os.makedirs(config.ARTIFACTS_DIR, exist_ok=True)
-    # Download NLTK data if needed (stopwords are used in data_handler)
+    # --- Check for NLTK stopwords resource ---
+    import nltk
     try:
         nltk.data.find('corpora/stopwords')
-    except nltk.downloader.DownloadError:
-        print("Downloading NLTK stopwords...")
-        nltk.download('stopwords')
+        print("NLTK stopwords already downloaded.")
+    except LookupError:
+        print("NLTK stopwords not found. Downloading...")
+        try:
+            nltk.download('stopwords')
+        except Exception as e:
+            print(f"Failed to download NLTK stopwords: {e}")
+            print("Continuing without stopwords...")
+
+    # --- Setup ---
+    os.makedirs(config.ARTIFACTS_DIR, exist_ok=True)
     # WordNet might still be needed if spaCy uses it internally or for other purposes
     try:
         nltk.data.find('corpora/wordnet')
-    except nltk.downloader.DownloadError:
-        print("Downloading NLTK wordnet...")
-        nltk.download('wordnet')
+        print("NLTK wordnet already downloaded.")
+    except LookupError:
+        print("NLTK wordnet not found. Downloading...")
+        try:
+            nltk.download('wordnet')
+        except Exception as e:
+            print(f"Failed to download NLTK wordnet: {e}")
+            print("Continuing without wordnet...")
 
     # --- Load Data ---
     print("Loading data...")
