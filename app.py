@@ -1,9 +1,4 @@
 # app.py
-"""
-Independent application script using manual vocab and preprocessing.
-Provides top-K emotion predictions.
-(TorchText Legacy Independent Version - Flexible Classes)
-"""
 import torch
 import torch.nn as nn
 import os
@@ -79,6 +74,8 @@ def load_trained_artifacts(device):
     if not os.path.exists(config.LABEL_MAP_SAVE_PATH):
         raise FileNotFoundError(f"Label mappings not found at {config.LABEL_MAP_SAVE_PATH}.")
     _, int_to_label = data_handler.load_label_mappings(config.LABEL_MAP_SAVE_PATH)
+    # Ensure int_to_label keys are integers
+    int_to_label = {int(k): v for k, v in int_to_label.items()}
     n_class = len(int_to_label) # Get class count from loaded map
 
     # 4. Initialize Model Architecture
