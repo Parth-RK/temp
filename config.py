@@ -8,7 +8,7 @@ import torch
 import os
 
 # --- Data Paths ---
-BASE_DIR = "/kaggle/input/emotion-dataset/" # Or your local path
+BASE_DIR = "." # Or your local path
 TRAIN_PATH = os.path.join(BASE_DIR, "training.csv")
 VAL_PATH = os.path.join(BASE_DIR, "validation.csv")
 TEST_PATH = os.path.join(BASE_DIR, "test.csv")
