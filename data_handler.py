@@ -165,9 +165,8 @@ def save_label_mappings(mappings, filepath):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
     label_to_int, int_to_label = mappings
-    
     label_to_int_str_keys = {str(k): int(v) for k, v in label_to_int.items()}
-    int_to_label_str_keys = {str(k): v for k, v in int_to_label.items()}
+    int_to_label_str_keys = {str(int(k)): v for k, v in int_to_label.items()}
 
     save_data = {
         'label_to_int': label_to_int_str_keys,
