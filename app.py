@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import os
 import json
+import sys
 
 import config
 import data_handler
@@ -40,7 +41,10 @@ def predict_emotion(text: str, model, text_preprocessor, vocabulary, int_to_labe
     for i in range(TOP_K):
         idx = top_indices[i]
         prob = top_probs[i]
-        label = int_to_label.get(idx, "Unknown")
+        if int_to_label:
+            label = int_to_label.get(idx, "Unknown")
+        else:
+            label = str(idx)
         predictions.append((label, prob))
 
     return predictions
@@ -52,14 +56,19 @@ def load_trained_artifacts(device):
 
     if not os.path.exists(config.VOCAB_SAVE_PATH):
         raise FileNotFoundError(f"Vocabulary not found at {config.VOCAB_SAVE_PATH}.")
-    vocabulary = data_handler.Vocabulary.load(config.VOCAB_SAVE_PATH)
+    vocabulary, n_class = data_handler.Vocabulary.load(config.VOCAB_SAVE_PATH)
     vocab_size = len(vocabulary)
 
-    if not os.path.exists(config.LABEL_MAP_SAVE_PATH):
-        raise FileNotFoundError(f"Label mappings not found at {config.LABEL_MAP_SAVE_PATH}.")
-    _, int_to_label = data_handler.load_label_mappings(config.LABEL_MAP_SAVE_PATH)
-    int_to_label = {int(k): v for k, v in int_to_label.items()}
-    n_class = len(int_to_label)
+    int_to_label = None
+    try:
+        _, int_to_label = data_handler.load_label_mappings(config.LABEL_MAP_SAVE_PATH)
+        int_to_label = {int(k): v for k, v in int_to_label.items()}
+        print(f"Loaded label mappings for {len(int_to_label)} classes.")
+    except FileNotFoundError:
+        print(f"Label mapping file not found at {config.LABEL_MAP_SAVE_PATH}. Numeric labels will be displayed.")
+    except Exception as e:
+        print(f"Error loading label mappings: {e}. Numeric labels will be displayed.")
+
 
     print(f"Initializing model architecture: {config.MODEL_TYPE} with {n_class} classes")
     if config.MODEL_TYPE == 'LSTM':
@@ -86,35 +95,46 @@ def load_trained_artifacts(device):
     return model, text_preprocessor, vocabulary, int_to_label
 
 if __name__ == "__main__":
-    loaded_model, loaded_preprocessor, loaded_vocab, loaded_int_to_label = load_trained_artifacts(config.DEVICE)
+    try:
+        loaded_model, loaded_preprocessor, loaded_vocab, loaded_int_to_label = load_trained_artifacts(config.DEVICE)
 
-    while True:
-        input_text = input(f"\nEnter text to analyze (top {TOP_K} emotions) (or 'quit' to exit): ")
-        if input_text.lower() == 'quit':
-            break
-        if not input_text.strip():
-             print("Input cannot be empty.")
-             continue
+        while True:
+            input_text = input(f"\nEnter text to analyze (top {TOP_K} emotions) (or 'quit' to exit): ")
+            if input_text.lower() == 'quit':
+                break
+            if not input_text.strip():
+                 print("Input cannot be empty.")
+                 continue
 
-        try:
-            top_predictions = predict_emotion(
-                input_text,
-                loaded_model,
-                loaded_preprocessor,
-                loaded_vocab,
-                loaded_int_to_label,
-                config.DEVICE
-            )
+            try:
+                top_predictions = predict_emotion(
+                    input_text,
+                    loaded_model,
+                    loaded_preprocessor,
+                    loaded_vocab,
+                    loaded_int_to_label,
+                    config.DEVICE
+                )
 
-            if isinstance(top_predictions, str) and top_predictions.startswith("Error"):
-                 print(top_predictions)
-            else:
-                print(f"\nTop {TOP_K} Predicted Emotions:")
-                for i, (label, conf) in enumerate(top_predictions):
-                    print(f"{i+1}. {label:<10} (Confidence: {conf:.4f})")
+                if isinstance(top_predictions, str) and top_predictions.startswith("Error"):
+                     print(top_predictions)
+                else:
+                    print(f"\nTop {TOP_K} Predicted Emotions:")
+                    for i, (label, conf) in enumerate(top_predictions):
+                        print(f"{i+1}. {label:<10} (Confidence: {conf:.4f})")
 
-        except Exception as e:
-            print(f"An error occurred during prediction: {e}")
-            import traceback
-            traceback.print_exc()
-        print("-" * 30)
+            except Exception as e:
+                print(f"An error occurred during prediction: {e}")
+                import traceback
+                traceback.print_exc()
+            print("-" * 30)
+
+    except FileNotFoundError as e:
+        print(f"Fatal Error: Required artifact not found: {e}")
+        print("Please ensure that the training process has been run successfully and artifacts exist.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred during initialization: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

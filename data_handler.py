@@ -55,12 +55,16 @@ class Vocabulary:
     def numericalize(self, text_tokens):
         return [self.stoi.get(token, UNK_IDX) for token in text_tokens]
 
-    def save(self, filepath):
+    def save(self, filepath, n_class):
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        save_data = {'stoi': self.stoi, 'freq_threshold': self.freq_threshold}
+        save_data = {
+            'stoi': self.stoi,
+            'freq_threshold': self.freq_threshold,
+            'n_class': n_class
+        }
         with open(filepath, 'w') as f:
             json.dump(save_data, f)
-        print(f"Vocabulary (stoi) saved to {filepath}")
+        print(f"Vocabulary (stoi) and n_class saved to {filepath}")
 
     @classmethod
     def load(cls, filepath):
@@ -70,15 +74,25 @@ class Vocabulary:
             loaded_data = json.load(f)
         stoi_loaded = loaded_data['stoi']
         freq_threshold = loaded_data.get('freq_threshold', config.MIN_FREQ)
+        n_class = loaded_data.get('n_class')
+        if n_class is None:
+             raise ValueError("Number of classes (n_class) not found in vocabulary file.")
 
         vocab = cls(freq_threshold)
-        vocab.stoi = stoi_loaded
-        vocab.itos = {int(k): v for k, v in vocab.stoi.items() if k.isdigit()}
-        vocab.itos.update({k:v for k, v in vocab.stoi.items() if not k.isdigit()})
-        vocab.stoi = {v: k for k, v in vocab.itos.items()}
 
-        print(f"Vocabulary loaded from {filepath}. Size: {len(vocab.itos)}")
-        return vocab
+        # Rebuild itos ensuring correct integer keys
+        itos_rebuilt = {}
+        stoi_rebuilt = {}
+        for token, index_str in stoi_loaded.items():
+             index = int(index_str)
+             itos_rebuilt[index] = token
+             stoi_rebuilt[token] = index
+
+        vocab.itos = itos_rebuilt
+        vocab.stoi = stoi_rebuilt
+
+        print(f"Vocabulary loaded from {filepath}. Size: {len(vocab.itos)}, n_class: {n_class}")
+        return vocab, n_class
 
 class TextPreprocessor:
     def __init__(self, use_stopwords=False):
@@ -222,13 +236,18 @@ def load_and_prepare_data(train_path, val_path, test_path, label_map_save_path):
             if 'text' not in df.columns or 'label' not in df.columns:
                 raise ValueError(f"{df_name} DataFrame is missing 'text' or 'label' column.")
             if df['label'].isnull().any():
+                label_column = 'label' # Define label_column here for the print message
                 print(f"Warning: Found NaN values in '{label_column}' of {df_name} data. Dropping rows.")
                 df.dropna(subset=['label'], inplace=True)
 
         label_column = 'label'
+        label_to_int, int_to_label = None, None
+        n_class = train_df[label_column].nunique() # Calculate n_class early
+
         if ptypes.is_integer_dtype(train_df[label_column]):
-            print(f"Detected integer labels in '{label_column}' column.")
-            label_to_int, int_to_label = create_placeholder_mappings(train_df, label_column)
+            print(f"Detected integer labels in '{label_column}' column. Using them directly. n_class={n_class}")
+            # Ensure labels are contiguous from 0 if necessary, or handle gaps later.
+            # For now, assume they are valid class indices.
             for df_name, df in [('Validation', val_df), ('Test', test_df)]:
                  if not ptypes.is_integer_dtype(df[label_column]):
                       try:
@@ -236,10 +255,13 @@ def load_and_prepare_data(train_path, val_path, test_path, label_map_save_path):
                            print(f"Converted '{label_column}' in {df_name} to integer.")
                       except ValueError:
                            raise TypeError(f"Training labels are integers, but {df_name} labels in column '{label_column}' are not and cannot be converted.")
+            print("Label map file will not be created for numeric labels.")
+
 
         elif ptypes.is_string_dtype(train_df[label_column]) or ptypes.is_object_dtype(train_df[label_column]):
-            print(f"Detected string/object labels in '{label_column}' column. Creating mappings.")
+            print(f"Detected string/object labels in '{label_column}' column. Creating mappings. n_class={n_class}")
             label_to_int, int_to_label = create_label_mappings(train_df, label_column)
+            n_class = len(label_to_int) # Recalculate n_class based on mapping
 
             print("Mapping string labels to integers...")
             for df_name, df in [('Train', train_df), ('Validation', val_df), ('Test', test_df)]:
@@ -251,13 +273,15 @@ def load_and_prepare_data(train_path, val_path, test_path, label_map_save_path):
                     df.dropna(subset=[label_column], inplace=True)
                 df[label_column] = df[label_column].astype(int)
 
+            save_label_mappings((label_to_int, int_to_label), label_map_save_path)
+
         else:
              raise TypeError(f"Unsupported label type '{train_df[label_column].dtype}' in column '{label_column}'. Labels must be integers or strings.")
 
-        save_label_mappings((label_to_int, int_to_label), label_map_save_path)
 
         print("Labels processed. 'label' column now contains integers.")
-        return train_df, val_df, test_df, label_to_int, int_to_label
+        # Return n_class along with other data
+        return train_df, val_df, test_df, label_to_int, int_to_label, n_class
 
     except FileNotFoundError as e:
         print(f"Error loading data: {e}. Check file paths in config.py.")

@@ -4,6 +4,7 @@ import torch.optim as optim
 import os
 import nltk
 from torch.utils.data import DataLoader
+import sys
 
 import config
 import data_handler
@@ -28,7 +29,7 @@ def check_nltk_resource(resource_id, resource_name):
                  print(f"Continuing without '{resource_name}'...")
 
 def run_training():
-    print("--- Starting Emotion Classification Training (Flexible Classes) ---")
+    print("--- Starting Emotion Classification Training ---")
     print(f"Using device: {config.DEVICE}")
     print(f"Selected model type: {config.MODEL_TYPE}")
 
@@ -36,12 +37,20 @@ def run_training():
     check_nltk_resource('stopwords', 'stopwords')
     check_nltk_resource('wordnet', 'wordnet')
 
-    print("Loading data and deriving label mappings...")
-    train_df, val_df, test_df, label_to_int, int_to_label = data_handler.load_and_prepare_data(
-        config.TRAIN_PATH, config.VAL_PATH, config.TEST_PATH, config.LABEL_MAP_SAVE_PATH
-    )
-    n_class = len(label_to_int)
-    print(f"Number of classes detected: {n_class}")
+    try:
+        print("Loading data and handling labels...")
+        train_df, val_df, test_df, label_to_int, _, n_class = data_handler.load_and_prepare_data(
+            config.TRAIN_PATH, config.VAL_PATH, config.TEST_PATH, config.LABEL_MAP_SAVE_PATH
+        )
+        print(f"Number of classes determined: {n_class}")
+    except FileNotFoundError as e:
+        print(f"Error: Data file not found: {e}. Please check paths in config.py")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error during data loading: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
     print("Initializing TextPreprocessor...")
     text_preprocessor = data_handler.TextPreprocessor(use_stopwords=False)
@@ -52,7 +61,7 @@ def run_training():
     print("Initializing and building Vocabulary...")
     vocabulary = data_handler.Vocabulary(freq_threshold=config.MIN_FREQ)
     vocabulary.build_vocabulary(train_tokens_list)
-    vocabulary.save(config.VOCAB_SAVE_PATH)
+    vocabulary.save(config.VOCAB_SAVE_PATH, n_class=n_class) # Save n_class with vocab
     vocab_size = len(vocabulary)
 
     print("Numericalizing datasets...")
@@ -101,7 +110,7 @@ def run_training():
             vocab_size=vocab_size,
             embedding_dim=config.EMBEDDING_DIM,
             hidden_dim=config.HIDDEN_DIM,
-            n_class=n_class,
+            n_class=n_class, # Use n_class determined earlier
             n_layers=config.N_LAYERS,
             pad_idx=PAD_IDX
         )
@@ -130,9 +139,8 @@ def run_training():
     engine.plot_history(history_df, config.RESULTS_PLOT_PATH)
 
     print("Evaluating final model on test set...")
-    if os.path.exists(config.MODEL_SAVE_PATH) and val_loader:
-         print("Reloading best saved model checkpoint for final evaluation...")
-         engine.load_checkpoint(config.MODEL_SAVE_PATH, trained_model, optimizer=None, device=config.DEVICE)
+    # The best model is already loaded by trainer if validation was used
+    # If no validation, the model from the last epoch is used
 
     test_acc, test_loss = engine.evaluate(
         model=trained_model,
