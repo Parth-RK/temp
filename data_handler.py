@@ -9,6 +9,7 @@ warnings.filterwarnings("ignore")
 import os
 import spacy
 import torch
+import torch.nn as nn
 import pandas as pd
 import numpy as np
 import json
