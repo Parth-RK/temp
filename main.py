@@ -110,7 +110,7 @@ def run_training():
             vocab_size=vocab_size,
             embedding_dim=config.EMBEDDING_DIM,
             hidden_dim=config.HIDDEN_DIM,
-            n_class=n_class, # Use n_class determined earlier
+            n_class=n_class,
             n_layers=config.N_LAYERS,
             pad_idx=PAD_IDX
         )
