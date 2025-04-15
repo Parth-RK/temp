@@ -34,7 +34,7 @@ EOS_IDX = 3
 MODEL_TYPE = 'CNN_RNN_Attention' # Use the new combined model
 
 # --- Shared Model Hyperparameters ---
-EMBEDDING_DIM = 300
+EMBEDDING_DIM = 500
 DROPOUT_PROB = 0.4 # General dropout probability
 
 # --- CNN Specific Hyperparameters (used if MODEL_TYPE is CNN_RNN_Attention) ---
@@ -50,9 +50,9 @@ RNN_LAYERS = 2
 # --- Training ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
-EPOCHS = 15 # Adjust as needed
-LEARNING_RATE = 0.001 # Single LR for now, might need tuning
-WEIGHT_DECAY = 1e-5 # Weight decay for AdamW optimizer
+EPOCHS =30
+LEARNING_RATE = 0.01 # Single LR for now, might need tuning
+WEIGHT_DECAY = 0.2 # Weight decay for AdamW optimizer
 SHUFFLE_DATA = True
 NUM_WORKERS = 2 # Dataloader workers
 
