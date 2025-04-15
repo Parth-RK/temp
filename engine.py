@@ -6,6 +6,8 @@ import seaborn as sns
 import os
 from tqdm import tqdm
 import config
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score, confusion_matrix, classification_report
+import numpy as np
 
 def accuracy_fn(y_true, y_pred):
     correct = torch.eq(y_true, y_pred).sum().item()
@@ -168,4 +170,61 @@ def plot_history(df, save_path=None):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path)
         print(f"Training plots saved to {save_path}")
+    plt.show()
+
+def generate_test_report(model, data_loader, criterion, device, int_to_label_map, report_save_path=None, conf_matrix_save_path=None):
+    """Evaluates the model on the test set and generates a report."""
+    print("\n--- Generating Final Test Report ---")
+    # Get predictions and true labels
+    model.eval()
+    all_preds = []
+    all_labels = []
+    total_loss = 0
+    with torch.inference_mode():
+        for X, y in tqdm(data_loader, desc="Test Evaluation"):
+            X, y = X.to(device), y.to(device)
+            y_pred_logits = model(X)
+            loss = criterion(y_pred_logits, y)
+            total_loss += loss.item()
+            y_pred_class = torch.softmax(y_pred_logits, dim=1).argmax(dim=1)
+            all_preds.extend(y_pred_class.cpu().numpy())
+            all_labels.extend(y.cpu().numpy())
+
+    avg_loss = total_loss / len(data_loader)
+    accuracy = accuracy_score(all_labels, all_preds) * 100
+
+    print(f"\nTest Loss: {avg_loss:.5f}")
+    print(f"Test Accuracy: {accuracy:.2f}%")
+
+    # Generate Classification Report
+    label_names = [int_to_label_map.get(i, str(i)) for i in sorted(int_to_label_map.keys())]
+    report = classification_report(all_labels, all_preds, target_names=label_names, zero_division=0, digits=3)
+    print("\nClassification Report:")
+    print(report)
+
+    if report_save_path:
+        os.makedirs(os.path.dirname(report_save_path), exist_ok=True)
+        with open(report_save_path, 'w') as f:
+            f.write(f"Test Loss: {avg_loss:.5f}\n")
+            f.write(f"Test Accuracy: {accuracy:.2f}%\n\n")
+            f.write("Classification Report:\n")
+            f.write(report)
+        print(f"Classification report saved to {report_save_path}")
+
+    # Generate and Plot Confusion Matrix
+    cm = confusion_matrix(all_labels, all_preds, labels=sorted(int_to_label_map.keys()))
+    plt.figure(figsize=(max(8, len(label_names)*0.6), max(6, len(label_names)*0.5))) # Adjust size based on num classes
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=label_names, yticklabels=label_names)
+    plt.xlabel('Predicted Label')
+    plt.ylabel('True Label')
+    plt.title('Confusion Matrix')
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+
+    if conf_matrix_save_path:
+        os.makedirs(os.path.dirname(conf_matrix_save_path), exist_ok=True)
+        plt.savefig(conf_matrix_save_path)
+        print(f"Confusion matrix saved to {conf_matrix_save_path}")
     plt.show()
