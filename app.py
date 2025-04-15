@@ -1,18 +1,26 @@
 # app.py
 """
-Independent application script to load a trained model and predict emotion from text input.
+Independent application script using manual vocab and preprocessing.
+(TorchText Legacy Independent Version)
 """
 import torch
-import torch.nn as nn # Required for loading model class definition
+import torch.nn as nn
 import os
 import json
 
 # --- Local Imports ---
 import config # For paths, tokens, model type etc.
-import data_handler
-import models # Need model class definitions to load state_dict
+import data_handler # Imports new Vocabulary and TextPreprocessor
+import models # Need model class definitions
+import engine # For load_final_model or load_checkpoint
 
-def predict_emotion(text: str, model, processor, device):
+# --- Define fixed indices from config ---
+PAD_IDX = config.PAD_IDX
+SOS_IDX = config.SOS_IDX
+EOS_IDX = config.EOS_IDX
+MAX_LENGTH = config.MAX_LENGTH # Max content length before SOS/EOS
+
+def predict_emotion(text: str, model, text_preprocessor, vocabulary, device):
     """Predicts emotion for a single text input."""
     if not text or not isinstance(text, str):
         return "Error: Invalid input text."
@@ -20,41 +28,23 @@ def predict_emotion(text: str, model, processor, device):
     print(f"Processing input: '{text}'")
     model.eval() # Ensure model is in evaluation mode
 
-    # 1. Clean and Tokenize using loaded processor methods
-    processor._lazy_load_spacy() # Ensure spacy is loaded
-    # Replicate cleaning steps (modify lemmatize for single string)
-    def lemmatize_single(txt):
-         if not txt.strip(): return ""
-         doc = processor.nlp(txt)
-         return " ".join(token.lemma_ for token in doc if token.lemma_ not in processor.stopwords and not token.is_punct and not token.is_space).lower()
-
-    cleaned_text = lemmatize_single(text)
-    tokens = processor.tokenize(cleaned_text)
+    # 1. Clean and Tokenize using TextPreprocessor
+    tokens = text_preprocessor.clean_and_tokenize(text)
     print(f"Tokens: {tokens}")
 
-    # 2. Convert to Numerical Indices
-    numerical_tokens = processor.convert_numerical(tokens)
-    print(f"Numerical Indices: {numerical_tokens}")
+    # 2. Numericalize using Vocabulary
+    numericalized_tokens = vocabulary.numericalize(tokens)
+    print(f"Numerical Indices (Content): {numericalized_tokens}")
 
-    # 3. Pad Sequence
-    padded_sequence = processor.pad_sequences([numerical_tokens])[0] # Pad the single sequence
-    print(f"Padded Indices: {padded_sequence}")
+    # 3. Add SOS/EOS and truncate
+    sequence = [SOS_IDX] + numericalized_tokens[:MAX_LENGTH] + [EOS_IDX]
+    print(f"Numerical Sequence (SOS/EOS): {sequence}")
 
     # 4. Convert to Tensor
-    input_tensor = torch.tensor(padded_sequence).unsqueeze(0) # Add batch dimension
-
-    # --- Model Specific Input Handling ---
-    if config.MODEL_TYPE == 'LSTM':
-        input_tensor = input_tensor.to(device).long() # LSTM expects long
-    elif config.MODEL_TYPE == 'ANN':
-         input_tensor = input_tensor.to(device).float() # ANN expects float
-    else:
-         # Default or raise error
-         input_tensor = input_tensor.to(device)
-    # -------------------------------------
+    input_tensor = torch.tensor(sequence, dtype=torch.long).unsqueeze(0) # Add batch dimension
+    input_tensor = input_tensor.to(device)
 
     print(f"Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
-
 
     # 5. Model Inference
     with torch.inference_mode():
@@ -73,20 +63,24 @@ def predict_emotion(text: str, model, processor, device):
     return predicted_label, confidence
 
 def load_trained_artifacts(device):
-    """Loads the trained model, preprocessor config, and vocabulary."""
+    """Loads the trained model, vocabulary, and initializes preprocessor."""
     print("--- Loading Trained Artifacts ---")
 
-    # 1. Load Preprocessor Config and Re-initialize
-    if not os.path.exists(config.PREPROCESSOR_SAVE_PATH):
-        raise FileNotFoundError(f"Preprocessor config not found at {config.PREPROCESSOR_SAVE_PATH}. Run main.py first.")
-    processor = data_handler.Preprocessor.from_config(config.PREPROCESSOR_SAVE_PATH)
+    # 1. Initialize TextPreprocessor
+    #    Load config if saved, otherwise assume default (e.g., use_stopwords=False)
+    # preprocessor_config_path = config.PREPROCESSOR_SAVE_PATH
+    # use_stopwords = False
+    # if os.path.exists(preprocessor_config_path):
+    #      with open(preprocessor_config_path, 'r') as f:
+    #           loaded_proc_config = json.load(f)
+    #           use_stopwords = loaded_proc_config.get('use_stopwords', False)
+    text_preprocessor = data_handler.TextPreprocessor(use_stopwords=False) # Match main.py setting
 
     # 2. Load Vocabulary
     if not os.path.exists(config.VOCAB_SAVE_PATH):
         raise FileNotFoundError(f"Vocabulary not found at {config.VOCAB_SAVE_PATH}. Run main.py first.")
-    processor.load_vocab(config.VOCAB_SAVE_PATH)
-    vocab_size = len(processor.vocab)
-    pad_idx = processor.vocab[config.PAD_TOKEN]
+    vocabulary = data_handler.Vocabulary.load(config.VOCAB_SAVE_PATH)
+    vocab_size = len(vocabulary)
 
     # 3. Initialize Model Architecture
     print(f"Initializing model architecture: {config.MODEL_TYPE}")
@@ -97,52 +91,32 @@ def load_trained_artifacts(device):
             hidden_dim=config.HIDDEN_DIM,
             n_class=config.N_CLASS,
             n_layers=config.N_LAYERS,
-            pad_idx=pad_idx
+            pad_idx=PAD_IDX # Use defined PAD_IDX
         )
-    elif config.MODEL_TYPE == 'ANN':
-        model = models.ANN(
-            input_size=config.ANN_INPUT_SIZE,
-            n_class=config.N_CLASS
-        )
+    # ANN less suitable now
+    # elif config.MODEL_TYPE == 'ANN':
+    #     model = models.ANN(...) # Needs redesign
     else:
-        raise ValueError(f"Unsupported model type: {config.MODEL_TYPE}")
+        raise ValueError(f"Unsupported or unsuitable model type for inference: {config.MODEL_TYPE}")
 
     # 4. Load Trained Model Weights
-    if not os.path.exists(config.MODEL_SAVE_PATH):
-         # Check for alternative final save name if used
-         alt_path = config.MODEL_SAVE_PATH.replace('.pt', '_final.pt')
-         if os.path.exists(alt_path):
-              model_path = alt_path
-         else:
-              raise FileNotFoundError(f"Trained model not found at {config.MODEL_SAVE_PATH} or {alt_path}. Run main.py first.")
-    else:
-         model_path = config.MODEL_SAVE_PATH
+    model_path = config.MODEL_SAVE_PATH
+    if not os.path.exists(model_path):
+         raise FileNotFoundError(f"Trained model checkpoint not found at {model_path}. Run main.py first.")
 
-    # Load state dict (handle checkpoint vs final model)
-    try:
-         # Try loading as final model state_dict first
-         engine.load_final_model(model, model_path, device)
-    except RuntimeError: # Likely a checkpoint file
-         print("Failed loading as final model, attempting to load as checkpoint...")
-         try:
-              # Need an optimizer instance temporarily, even if not used
-              # Create a dummy optimizer based on model type
-              if config.MODEL_TYPE == 'LSTM':
-                   dummy_optimizer = torch.optim.Adam(model.parameters(), lr=config.LEARNING_RATE_LSTM)
-              else:
-                   dummy_optimizer = torch.optim.Adam(model.parameters(), lr=config.LEARNING_RATE_ANN)
-              engine.load_checkpoint(model_path, model, dummy_optimizer, device)
-              model.eval() # Ensure eval mode after loading checkpoint
-         except Exception as e:
-              print(f"Error loading model checkpoint: {e}")
-              raise FileNotFoundError(f"Could not load model weights from {model_path}. Check file format and config.")
+    # Use load_checkpoint as it loads the state_dict into the model structure
+    # Need a dummy optimizer instance only if loading optimizer state (not needed for inference)
+    engine.load_checkpoint(model_path, model, optimizer=None, device=device)
+    # Or use load_final_model if you saved only the state_dict at the very end
+    # engine.load_final_model(model, model_path, device)
 
+    model.eval() # Explicitly set to eval mode
 
     print("--- Artifacts Loaded Successfully ---")
-    return model, processor
+    return model, text_preprocessor, vocabulary
 
 if __name__ == "__main__":
-    loaded_model, loaded_processor = load_trained_artifacts(config.DEVICE)
+    loaded_model, loaded_text_preprocessor, loaded_vocabulary = load_trained_artifacts(config.DEVICE)
 
     # Example Usage:
     while True:
@@ -153,6 +127,16 @@ if __name__ == "__main__":
              print("Input cannot be empty.")
              continue
 
-        label, conf = predict_emotion(input_text, loaded_model, loaded_processor, config.DEVICE)
-        print(f"Predicted Emotion: {label} (Confidence: {conf:.4f})")
+        try:
+            label, conf = predict_emotion(
+                input_text,
+                loaded_model,
+                loaded_text_preprocessor,
+                loaded_vocabulary,
+                config.DEVICE
+            )
+            print(f"Predicted Emotion: {label} (Confidence: {conf:.4f})")
+        except Exception as e:
+            print(f"An error occurred during prediction: {e}")
+            # Add more detailed error handling if needed
         print("-" * 20)
