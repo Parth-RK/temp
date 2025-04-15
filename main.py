@@ -5,6 +5,8 @@ import os
 import nltk
 from torch.utils.data import DataLoader
 import sys
+import json
+import numpy as np
 
 import config
 import data_handler
@@ -37,39 +39,80 @@ def run_training():
     check_nltk_resource('stopwords', 'stopwords')
     check_nltk_resource('wordnet', 'wordnet')
 
+    # --- Load Label Map Separately First (If it exists) ---
+    int_to_label_map = None
+    if os.path.exists(config.LABEL_MAP_SAVE_PATH):
+        try:
+             _, int_to_label_map = data_handler.load_label_mappings(config.LABEL_MAP_SAVE_PATH)
+             print("Loaded existing label map for analysis.")
+        except Exception as e:
+            print(f"Warning: Could not load label map at {config.LABEL_MAP_SAVE_PATH}: {e}")
+            int_to_label_map = None
+
     try:
         print("Loading data and handling labels...")
-        train_df, val_df, test_df, label_to_int, _, n_class = data_handler.load_and_prepare_data(
+        train_df, val_df, test_df, _, loaded_int_to_label, n_class = data_handler.load_and_prepare_data(
             config.TRAIN_PATH, config.VAL_PATH, config.TEST_PATH, config.LABEL_MAP_SAVE_PATH
         )
+        int_to_label_map = loaded_int_to_label
         print(f"Number of classes determined: {n_class}")
     except FileNotFoundError as e:
         print(f"Error: Data file not found: {e}. Please check paths in config.py")
         sys.exit(1)
+    except TypeError as e:
+         print(f"Error: Problem with label types: {e}")
+         sys.exit(1)
     except Exception as e:
         print(f"Error during data loading: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
 
-    print("Initializing TextPreprocessor...")
+    print("\n--- Data Analysis ---")
+    if int_to_label_map:
+        train_df_display = train_df.copy()
+        train_df_display['label_str'] = train_df_display['label'].map(int_to_label_map)
+        data_handler.plot_class_distribution(
+            train_df_display,
+            label_column='label_str',
+            title="Training Set Class Distribution",
+            save_path=os.path.join(config.ARTIFACTS_DIR, "train_class_distribution.png")
+        )
+    else:
+         data_handler.plot_class_distribution(
+            train_df,
+            label_column='label',
+            title="Training Set Class Distribution (Integer Labels)",
+            save_path=os.path.join(config.ARTIFACTS_DIR, "train_class_distribution.png")
+        )
+
+    print("\nInitializing TextPreprocessor...")
     text_preprocessor = data_handler.TextPreprocessor(use_stopwords=False)
 
-    print("Preprocessing training data...")
+    print("Preprocessing training data (for sequence length analysis)...")
     train_tokens_list = text_preprocessor.preprocess_dataframe(train_df)
 
-    print("Initializing and building Vocabulary...")
+    data_handler.plot_sequence_lengths(
+        train_tokens_list,
+        title="Training Sequence Length Distribution (Before Padding)",
+        save_path=os.path.join(config.ARTIFACTS_DIR, "train_seq_length_distribution.png")
+    )
+
+    print("\nInitializing and building Vocabulary...")
     vocabulary = data_handler.Vocabulary(freq_threshold=config.MIN_FREQ)
     vocabulary.build_vocabulary(train_tokens_list)
-    vocabulary.save(config.VOCAB_SAVE_PATH, n_class=n_class) # Save n_class with vocab
+    vocabulary.save(config.VOCAB_SAVE_PATH, n_class=n_class)
     vocab_size = len(vocabulary)
+    print(f"Vocabulary size: {vocab_size}")
 
     print("Numericalizing datasets...")
     def numericalize_tokens(tokens_list, vocab, max_len):
-        return [
-            [config.SOS_IDX] + vocab.numericalize(tokens)[:max_len] + [config.EOS_IDX]
-            for tokens in tokens_list
-        ]
+        numericalized = []
+        for tokens in tokens_list:
+             truncated_tokens = tokens[:max_len-2]
+             seq = [config.SOS_IDX] + vocab.numericalize(truncated_tokens) + [config.EOS_IDX]
+             numericalized.append(seq)
+        return numericalized
 
     train_sequences = numericalize_tokens(train_tokens_list, vocabulary, config.MAX_LENGTH)
 
@@ -81,9 +124,9 @@ def run_training():
     test_tokens_list = text_preprocessor.preprocess_dataframe(test_df)
     test_sequences = numericalize_tokens(test_tokens_list, vocabulary, config.MAX_LENGTH)
 
-    train_labels = train_df['label'].to_numpy()
-    val_labels = val_df['label'].to_numpy()
-    test_labels = test_df['label'].to_numpy()
+    train_labels = train_df['label'].to_numpy(dtype=np.int64)
+    val_labels = val_df['label'].to_numpy(dtype=np.int64)
+    test_labels = test_df['label'].to_numpy(dtype=np.int64)
 
     print("Creating PyTorch Datasets...")
     train_dataset = data_handler.EmotionDataset(train_sequences, train_labels)
@@ -91,17 +134,21 @@ def run_training():
     test_dataset = data_handler.EmotionDataset(test_sequences, test_labels)
 
     print("Creating DataLoaders...")
+    pin_memory = config.DEVICE == "cuda"
     train_loader = DataLoader(
         dataset=train_dataset, batch_size=config.BATCH_SIZE,
-        shuffle=config.SHUFFLE_DATA, collate_fn=data_handler.collate_batch
+        shuffle=config.SHUFFLE_DATA, collate_fn=data_handler.collate_batch,
+        num_workers=config.NUM_WORKERS, pin_memory=pin_memory
     )
     val_loader = DataLoader(
         dataset=val_dataset, batch_size=config.BATCH_SIZE,
-        shuffle=False, collate_fn=data_handler.collate_batch
+        shuffle=False, collate_fn=data_handler.collate_batch,
+        num_workers=config.NUM_WORKERS, pin_memory=pin_memory
     )
     test_loader = DataLoader(
         dataset=test_dataset, batch_size=config.BATCH_SIZE,
-        shuffle=False, collate_fn=data_handler.collate_batch
+        shuffle=False, collate_fn=data_handler.collate_batch,
+        num_workers=config.NUM_WORKERS, pin_memory=pin_memory
     )
 
     print(f"Building model: {config.MODEL_TYPE}")
@@ -112,18 +159,21 @@ def run_training():
             hidden_dim=config.HIDDEN_DIM,
             n_class=n_class,
             n_layers=config.N_LAYERS,
-            pad_idx=PAD_IDX
+            pad_idx=PAD_IDX,
+            dropout_prob=config.DROPOUT_PROB
         )
-        optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE_LSTM)
     else:
-        raise ValueError(f"Unsupported or unsuitable model type: {config.MODEL_TYPE}")
+        raise ValueError(f"Unsupported model type: {config.MODEL_TYPE}")
+
+    optimizer = optim.AdamW(model.parameters(), lr=config.LEARNING_RATE_LSTM, weight_decay=config.WEIGHT_DECAY)
 
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX)
+
     print(f"Model:\n{model}")
     print(f"Optimizer: {optimizer}")
     print(f"Criterion: {criterion}")
 
-    print("Starting training...")
+    print("\nStarting training...")
     trained_model, history_df = engine.trainer(
         model=model,
         train_loader=train_loader,
@@ -135,25 +185,36 @@ def run_training():
         model_save_path=config.MODEL_SAVE_PATH
     )
 
-    print("Plotting training history...")
+    print("\nPlotting training history...")
     engine.plot_history(history_df, config.RESULTS_PLOT_PATH)
 
-    print("Evaluating final model on test set...")
-    # The best model is already loaded by trainer if validation was used
-    # If no validation, the model from the last epoch is used
+    print("\nEvaluating final model on test set...")
+    if int_to_label_map is None:
+         print("Warning: Label map not found. Reports will use integer labels.")
+         max_label = test_df['label'].max()
+         int_to_label_map = {i: str(i) for i in range(max_label + 1)}
 
-    test_acc, test_loss = engine.evaluate(
+    engine.generate_test_report(
         model=trained_model,
         data_loader=test_loader,
         criterion=criterion,
-        device=config.DEVICE
+        device=config.DEVICE,
+        int_to_label_map=int_to_label_map,
+        report_save_path=os.path.join(config.ARTIFACTS_DIR, "test_classification_report.txt"),
+        conf_matrix_save_path=os.path.join(config.ARTIFACTS_DIR, "test_confusion_matrix.png")
     )
-    print(f"\n--- Final Test Results ---")
-    print(f"Test Loss: {test_loss:.5f}")
-    print(f"Test Accuracy: {test_acc:.2f}%")
-    print("-" * 30)
 
-    print("--- Training Pipeline Finished ---")
+    print("\n--- Training Pipeline Finished ---")
 
 if __name__ == "__main__":
+    if not hasattr(config, 'NUM_WORKERS'):
+        config.NUM_WORKERS = 0
+        print("Setting config.NUM_WORKERS to default 0")
+    if not hasattr(config, 'DROPOUT_PROB'):
+        config.DROPOUT_PROB = 0.5
+        print("Setting config.DROPOUT_PROB to default 0.5")
+    if not hasattr(config, 'WEIGHT_DECAY'):
+        config.WEIGHT_DECAY = 0.0
+        print("Setting config.WEIGHT_DECAY to default 0.0")
+
     run_training()

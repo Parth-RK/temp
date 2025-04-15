@@ -13,7 +13,7 @@ LABEL_MAP_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "label_map.json")
 PREPROCESSOR_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "preprocessor_config.json")
 RESULTS_PLOT_PATH = os.path.join(ARTIFACTS_DIR, "training_plots.png")
 
-MAX_LENGTH = 128
+MAX_LENGTH = 64
 MIN_FREQ = 2
 
 PAD_TOKEN = "<pad>"
@@ -27,9 +27,9 @@ EOS_IDX = 3
 
 MODEL_TYPE = 'LSTM'
 
-EMBEDDING_DIM = 128
-HIDDEN_DIM = 64
-N_LAYERS = 2
+EMBEDDING_DIM = 512
+HIDDEN_DIM = 256
+N_LAYERS = 4
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 32
@@ -40,3 +40,6 @@ SHUFFLE_DATA = True
 SPACY_MODEL = "en_core_web_md"
 
 TOP_K_PREDICTIONS = 3
+NUM_WORKERS = 1
+DROPOUT_PROB = 0.3
+WEIGHT_DECAY = 1e-5

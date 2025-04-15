@@ -29,7 +29,7 @@ class LSTMNetwork(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, n_class, n_layers, pad_idx, dropout_prob=0.5):
         super().__init__()
         print(f"Initializing LSTM with vocab_size={vocab_size}, embedding_dim={embedding_dim}, "
-              f"hidden_dim={hidden_dim}, n_layers={n_layers}, n_class={n_class}, pad_idx={pad_idx}")
+              f"hidden_dim={hidden_dim}, n_layers={n_layers}, n_class={n_class}, pad_idx={pad_idx}, dropout={dropout_prob}")
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_idx)
         self.lstm = nn.LSTM(embedding_dim,
                             hidden_dim,

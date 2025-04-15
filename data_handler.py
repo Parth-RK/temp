@@ -14,6 +14,9 @@ from collections import Counter
 from tqdm import tqdm
 import config
 import pandas.api.types as ptypes
+import matplotlib.pyplot as plt
+import seaborn as sns
+from collections import Counter
 
 PAD_IDX = config.PAD_IDX
 UNK_IDX = config.UNK_IDX
@@ -401,6 +404,9 @@ def load_and_prepare_data(train_path, val_path, test_path, label_map_save_path):
         else:
              raise TypeError(f"Unsupported label type '{train_df[label_column].dtype}' in column '{label_column}'. Labels must be integers or strings.")
 
+        print_data_summary(train_df, "Train", label_column)
+        print_data_summary(val_df, "Validation", label_column)
+        print_data_summary(test_df, "Test", label_column)
         print(f"Labels processed. '{label_column}' column now contains integer indices.")
         print(f"Final determined number of classes (n_class): {n_class}")
 
@@ -415,3 +421,51 @@ def load_and_prepare_data(train_path, val_path, test_path, label_map_save_path):
         import traceback
         traceback.print_exc()
         raise
+    
+def plot_class_distribution(df, label_column='label', title="Class Distribution", save_path=None):
+    """Plots the distribution of classes in a DataFrame."""
+    plt.figure(figsize=(10, 6))
+    class_counts = df[label_column].value_counts()
+    sns.barplot(x=class_counts.index, y=class_counts.values, palette="viridis")
+    plt.title(title)
+    plt.xlabel("Class Label")
+    plt.ylabel("Frequency")
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path)
+        print(f"Class distribution plot saved to {save_path}")
+    plt.show()
+
+def plot_sequence_lengths(token_lists, title="Sequence Length Distribution (Before Padding)", save_path=None):
+    """Plots the distribution of sequence lengths."""
+    lengths = [len(tokens) for tokens in token_lists]
+    plt.figure(figsize=(10, 6))
+    sns.histplot(lengths, bins=50, kde=True)
+    avg_len = np.mean(lengths)
+    med_len = np.median(lengths)
+    max_len = np.max(lengths)
+    plt.title(f"{title}\nAvg: {avg_len:.2f}, Median: {med_len:.0f}, Max: {max_len:.0f}")
+    plt.xlabel("Sequence Length")
+    plt.ylabel("Frequency")
+    plt.axvline(avg_len, color='r', linestyle='dashed', linewidth=1, label=f'Avg Len ({avg_len:.2f})')
+    plt.axvline(config.MAX_LENGTH, color='g', linestyle='dashed', linewidth=1, label=f'MAX_LENGTH ({config.MAX_LENGTH})')
+    plt.legend()
+    plt.tight_layout()
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path)
+        print(f"Sequence length plot saved to {save_path}")
+    plt.show()
+
+def print_data_summary(df, name, label_column='label'):
+    """Prints a summary of the dataframe."""
+    print(f"\n--- {name} Data Summary ---")
+    print(f"Shape: {df.shape}")
+    if label_column in df.columns:
+        print("Label Distribution:")
+        print(df[label_column].value_counts(normalize=True) * 100)
+    else:
+        print("Label column not found.")
+    print("-" * (len(name) + 18))
