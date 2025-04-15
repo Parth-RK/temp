@@ -79,8 +79,7 @@ def trainer(model, train_loader, optimizer, criterion, epochs, device, val_loade
             batch_acc = accuracy_fn(y, y_pred_class)
             epoch_loss += loss.item()
             epoch_acc += batch_acc
-            progress_bar.set_postfix({'loss': loss.item():.4f, 'acc': batch_acc:.2f})
-
+            progress_bar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{batch_acc:.2f}'})
 
         # --- Epoch End Evaluation ---
         avg_epoch_train_loss = epoch_loss / len(train_loader) # Or use evaluate
