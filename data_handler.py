@@ -160,14 +160,32 @@ def create_label_mappings(train_df, label_column='label'):
     print(f"Found {len(unique_labels)} unique labels: {unique_labels}")
     return label_to_int, int_to_label
 
+def to_native(obj):
+    """Recursively convert numpy types to native Python types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {to_native(k): to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [to_native(i) for i in obj]
+    elif hasattr(obj, 'item') and callable(obj.item):
+        try:
+            return obj.item()
+        except Exception:
+            return obj
+    elif isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    else:
+        return obj
+
 def save_label_mappings(mappings, filepath):
     """Saves label mappings ensuring all keys are strings for JSON compatibility."""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
     label_to_int, int_to_label = mappings
-    label_to_int_str_keys = {str(k): int(v) for k, v in label_to_int.items()}
-    int_to_label_str_keys = {str(int(k)): v for k, v in int_to_label.items()}
-
+    label_to_int_native = to_native(label_to_int)
+    int_to_label_native = to_native(int_to_label)
+    label_to_int_str_keys = {str(k): v for k, v in label_to_int_native.items()}
+    int_to_label_str_keys = {str(k): v for k, v in int_to_label_native.items()}
+    
     save_data = {
         'label_to_int': label_to_int_str_keys,
         'int_to_label': int_to_label_str_keys
