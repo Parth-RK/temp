@@ -1,7 +1,7 @@
 # data_handler.py
 """
 Handles data loading, cleaning, preprocessing, and Dataset creation.
-(TorchText Legacy Independent Version)
+Determines label mappings dynamically from training data.
 """
 import warnings
 warnings.filterwarnings("ignore")
@@ -17,7 +17,7 @@ from nltk.corpus import stopwords as nltk_stopwords
 from torch.utils.data import Dataset
 from collections import Counter
 from tqdm import tqdm
-import config # Import config for special tokens/indices
+import config
 
 # --- Define fixed indices from config ---
 PAD_IDX = config.PAD_IDX
@@ -25,7 +25,6 @@ UNK_IDX = config.UNK_IDX
 SOS_IDX = config.SOS_IDX
 EOS_IDX = config.EOS_IDX
 
-# --- Get spaCy model name from config ---
 SPACY_MODEL = config.SPACY_MODEL
 
 class Vocabulary:
@@ -43,17 +42,15 @@ class Vocabulary:
     def build_vocabulary(self, sentence_list):
         print("Building vocabulary...")
         frequencies = Counter()
-        idx = len(self.itos) # Start indexing after special tokens
+        idx = len(self.itos)
 
         for sentence in tqdm(sentence_list, desc="Counting Frequencies"):
             frequencies.update(sentence)
 
-        # Limit vocab size if max_size is set
         if self.max_size is not None:
-            most_common = frequencies.most_common(self.max_size - len(self.itos)) # Exclude special tokens from count limit
-            frequencies = Counter(dict(most_common)) # Keep only most common words above threshold
+            limited_freq = frequencies.most_common(self.max_size - len(self.itos))
+            frequencies = Counter(dict(limited_freq))
 
-        # Create stoi and itos
         for word, freq in tqdm(frequencies.items(), desc="Creating Mappings"):
             if freq >= self.freq_threshold:
                 self.stoi[word] = idx
@@ -62,13 +59,10 @@ class Vocabulary:
         print(f"Vocabulary built. Size: {len(self.itos)}")
 
     def numericalize(self, text_tokens):
-        # Input should be a list of tokens for a single sentence
         return [self.stoi.get(token, UNK_IDX) for token in text_tokens]
 
     def save(self, filepath):
-        """Saves stoi dictionary to JSON."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        # Need to save freq_threshold too if needed for loading
         save_data = {'stoi': self.stoi, 'freq_threshold': self.freq_threshold}
         with open(filepath, 'w') as f:
             json.dump(save_data, f)
@@ -76,35 +70,31 @@ class Vocabulary:
 
     @classmethod
     def load(cls, filepath):
-        """Loads stoi dictionary from JSON and creates Vocabulary object."""
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Vocabulary file not found at {filepath}")
         with open(filepath, 'r') as f:
             loaded_data = json.load(f)
         stoi_loaded = loaded_data['stoi']
-        freq_threshold = loaded_data.get('freq_threshold', 2) # Default if missing
+        freq_threshold = loaded_data.get('freq_threshold', config.MIN_FREQ)
 
-        # Reconstruct Vocabulary object
-        vocab = cls(freq_threshold) # Use loaded threshold
+        vocab = cls(freq_threshold)
         vocab.stoi = stoi_loaded
-        # Rebuild itos from loaded stoi
-        vocab.itos = {v: k for k, v in stoi_loaded.items()}
+        vocab.itos = {int(v): k for k, v in stoi_loaded.items()} # Ensure keys are int if loading from JSON
         print(f"Vocabulary loaded from {filepath}. Size: {len(vocab.itos)}")
         return vocab
-
 
 class TextPreprocessor:
     def __init__(self, use_stopwords=False):
         self.nlp = None
         self.stopwords = set(nltk_stopwords.words('english')) if use_stopwords else set()
-        print(f"Stopwords {'enabled' if use_stopwords else 'disabled'}.")
+        self._lazy_load_spacy() # Load spacy once on init
+        print(f"TextPreprocessor initialized. Stopwords {'enabled' if use_stopwords else 'disabled'}.")
 
     def _lazy_load_spacy(self):
-        """Loads spacy model only when needed."""
         if self.nlp is None:
             print(f"Loading spaCy model '{SPACY_MODEL}'...")
             try:
-                self.nlp = spacy.load(SPACY_MODEL, disable=["parser", "ner"]) # Faster loading
+                self.nlp = spacy.load(SPACY_MODEL, disable=["parser", "ner"])
             except OSError:
                 print(f"Spacy model '{SPACY_MODEL}' not found. Downloading...")
                 spacy.cli.download(SPACY_MODEL)
@@ -112,36 +102,27 @@ class TextPreprocessor:
             print("spaCy model loaded.")
 
     def clean_and_tokenize(self, text):
-        """Cleans and tokenizes a single text string."""
-        self._lazy_load_spacy()
-        text = str(text).lower() # Lowercase
-        # Use spaCy's tokenizer and lemmatizer efficiently
+        text = str(text).lower()
         doc = self.nlp(text)
         tokens = [
-            token.lemma_ # Lemmatize
-            for token in doc
-            if not token.is_stop and # Use spaCy's stopword flag if not using nltk list
+            token.lemma_ for token in doc
+            if not token.is_stop and
                not token.is_punct and
                not token.is_space and
-               token.lemma_ not in self.stopwords # Filter nltk stopwords if enabled
+               token.lemma_ not in self.stopwords
         ]
         return tokens
 
-    def preprocess_dataframe(self, df):
-        """Applies cleaning and tokenization to a DataFrame text column."""
-        if 'text' not in df.columns:
-             raise ValueError("Input DataFrame must contain a 'text' column.")
-        df['text'] = df['text'].fillna('') # Handle NaNs
+    def preprocess_dataframe(self, df, text_column='text'):
+        if text_column not in df.columns:
+             raise ValueError(f"Input DataFrame must contain a '{text_column}' column.")
+        df[text_column] = df[text_column].fillna('')
 
-        print("Preprocessing DataFrame (cleaning, tokenizing, lemmatizing)...")
-        # Apply the combined function
-        # Consider using pandarallel or multiprocessing for large dataframes
-        processed_texts = [self.clean_and_tokenize(text) for text in tqdm(df['text'], desc="Processing Texts")]
+        print(f"Preprocessing DataFrame column '{text_column}'...")
+        processed_texts = [self.clean_and_tokenize(text) for text in tqdm(df[text_column], desc="Processing Texts")]
         print("Preprocessing Done!")
         return processed_texts
 
-
-# --- PyTorch Dataset ---
 class EmotionDataset(Dataset):
     def __init__(self, sequences, labels):
         self.sequences = sequences
@@ -154,44 +135,88 @@ class EmotionDataset(Dataset):
 
     def __getitem__(self, idx):
         sequence = torch.tensor(self.sequences[idx], dtype=torch.long)
-        label = torch.tensor(self.labels[idx], dtype=torch.long) # Labels should be Long
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
         return sequence, label
 
-# --- Collate Function (Handles Padding) ---
 def collate_batch(batch):
-    """Collate function to pad sequences in a batch."""
     label_list, text_list, lengths = [], [], []
     for (_text, _label) in batch:
         label_list.append(_label)
         processed_text = torch.tensor(_text, dtype=torch.long)
         text_list.append(processed_text)
-        lengths.append(len(processed_text)) # Store original lengths if needed (e.g., for PackedSequence)
+        lengths.append(len(processed_text))
 
-    # Pad sequences to the max length in the batch
     padded_texts = nn.utils.rnn.pad_sequence(text_list, batch_first=True, padding_value=PAD_IDX)
-    labels = torch.stack(label_list) # Stack labels into a tensor
-    lengths = torch.tensor(lengths, dtype=torch.long)
+    labels = torch.stack(label_list)
+    # lengths = torch.tensor(lengths, dtype=torch.long) # Uncomment if using packed sequences
 
-    return padded_texts, labels # Removed lengths return for simplicity, add back if using PackedSequence
+    return padded_texts, labels # Return only padded texts and labels
+
+def create_label_mappings(train_df, label_column='label'):
+    """Determines unique labels and creates mappings."""
+    unique_labels = sorted(train_df[label_column].unique())
+    label_to_int = {label: i for i, label in enumerate(unique_labels)}
+    int_to_label = {i: label for label, i in label_to_int.items()}
+    print(f"Found {len(unique_labels)} unique labels: {unique_labels}")
+    return label_to_int, int_to_label
+
+def save_label_mappings(mappings, filepath):
+    """Saves label mappings (label_to_int, int_to_label) to JSON."""
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    save_data = {
+        'label_to_int': mappings[0],
+        # Ensure int keys in int_to_label are strings for JSON compatibility
+        'int_to_label': {str(k): v for k, v in mappings[1].items()}
+    }
+    with open(filepath, 'w') as f:
+        json.dump(save_data, f, indent=4)
+    print(f"Label mappings saved to {filepath}")
+
+def load_label_mappings(filepath):
+    """Loads label mappings from JSON."""
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Label mapping file not found at {filepath}")
+    with open(filepath, 'r') as f:
+        loaded_data = json.load(f)
+    # Convert int_to_label keys back to integers
+    int_to_label_loaded = {int(k): v for k, v in loaded_data['int_to_label'].items()}
+    mappings = (loaded_data['label_to_int'], int_to_label_loaded)
+    print(f"Label mappings loaded from {filepath}. Num classes: {len(mappings[0])}")
+    return mappings
 
 
-# --- Helper function to load data ---
-def load_data(train_path, val_path, test_path):
-    """Loads train, validation, and test data from CSV files."""
+def load_and_prepare_data(train_path, val_path, test_path, label_map_save_path):
+    """Loads data, creates label mappings, maps labels, and saves mappings."""
     try:
-        train_data = pd.read_csv(train_path)
-        val_data = pd.read_csv(val_path)
-        test_data = pd.read_csv(test_path)
-        print("Data loaded successfully.")
-        print(f"Train shape: {train_data.shape}, Val shape: {val_data.shape}, Test shape: {test_data.shape}")
-        # Basic check for required columns
-        for df_name, df in [('Train', train_data), ('Validation', val_data), ('Test', test_data)]:
+        train_df = pd.read_csv(train_path)
+        val_df = pd.read_csv(val_path)
+        test_df = pd.read_csv(test_path)
+        print("Raw data loaded successfully.")
+        print(f"Train shape: {train_df.shape}, Val shape: {val_df.shape}, Test shape: {test_df.shape}")
+
+        for df_name, df in [('Train', train_df), ('Validation', val_df), ('Test', test_df)]:
             if 'text' not in df.columns or 'label' not in df.columns:
-                raise ValueError(f"{df_name} DataFrame is missing required 'text' or 'label' column.")
-        return train_data, val_data, test_data
+                raise ValueError(f"{df_name} DataFrame is missing 'text' or 'label' column.")
+
+        # Create mappings from training data
+        label_to_int, int_to_label = create_label_mappings(train_df, 'label')
+        save_label_mappings((label_to_int, int_to_label), label_map_save_path)
+
+        # Map string labels to integers in all dataframes
+        for df in [train_df, val_df, test_df]:
+            df['label'] = df['label'].map(label_to_int)
+            # Optional: Handle labels present in val/test but not train?
+            if df['label'].isnull().any():
+                 print(f"Warning: Found labels in validation/test set not present in training data. Mapping to NaN.")
+                 # Decide handling: dropna(), fillna(-1), or raise error
+                 # df.dropna(subset=['label'], inplace=True)
+
+        print("Labels mapped to integers.")
+        return train_df, val_df, test_df, label_to_int, int_to_label
+
     except FileNotFoundError as e:
-        print(f"Error loading data: {e}. Please check file paths in config.py.")
+        print(f"Error loading data: {e}. Check file paths in config.py.")
         raise
     except Exception as e:
-        print(f"An unexpected error occurred during data loading: {e}")
+        print(f"An unexpected error occurred during data loading/preparation: {e}")
         raise

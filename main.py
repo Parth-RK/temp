@@ -1,7 +1,8 @@
 # main.py
 """
 Main script using manual vocab, custom Dataset, and DataLoader.
-(TorchText Legacy Independent Version)
+Determines number of classes dynamically.
+(TorchText Legacy Independent Version - Flexible Classes)
 """
 import torch
 import torch.nn as nn
@@ -12,55 +13,51 @@ from torch.utils.data import DataLoader
 
 # --- Local Imports ---
 import config
-import data_handler # Imports new classes/functions
+import data_handler
 import models
 import engine
 
-# --- Define fixed indices from config ---
 PAD_IDX = config.PAD_IDX
+
+def check_nltk_resource(resource_id, resource_name):
+    """Checks and downloads NLTK resource if needed."""
+    try:
+        nltk.data.find(f'corpora/{resource_id}')
+        print(f"NLTK resource '{resource_name}' already downloaded.")
+    except LookupError:
+        print(f"NLTK resource '{resource_name}' not found. Downloading...")
+        try:
+            nltk.download(resource_id)
+        except Exception as e:
+            print(f"Failed to download NLTK resource '{resource_name}': {e}")
+            # Decide if essential. Stopwords are optional, wordnet might be needed by spacy lemma.
+            if resource_id == 'wordnet':
+                 print("Warning: WordNet download failed. Lemmatization might be affected.")
+            else:
+                 print(f"Continuing without '{resource_name}'...")
 
 def run_training():
     """Main function to run the training process."""
-    print("--- Starting Emotion Classification Training (No TorchText Legacy) ---")
+    print("--- Starting Emotion Classification Training (Flexible Classes) ---")
     print(f"Using device: {config.DEVICE}")
     print(f"Selected model type: {config.MODEL_TYPE}")
 
-    # --- Check for NLTK stopwords resource ---
-    import nltk
-    try:
-        nltk.data.find('corpora/stopwords')
-        print("NLTK stopwords already downloaded.")
-    except LookupError:
-        print("NLTK stopwords not found. Downloading...")
-        try:
-            nltk.download('stopwords')
-        except Exception as e:
-            print(f"Failed to download NLTK stopwords: {e}")
-            print("Continuing without stopwords...")
-
     # --- Setup ---
     os.makedirs(config.ARTIFACTS_DIR, exist_ok=True)
-    # WordNet might still be needed if spaCy uses it internally or for other purposes
-    try:
-        nltk.data.find('corpora/wordnet')
-        print("NLTK wordnet already downloaded.")
-    except LookupError:
-        print("NLTK wordnet not found. Downloading...")
-        try:
-            nltk.download('wordnet')
-        except Exception as e:
-            print(f"Failed to download NLTK wordnet: {e}")
-            print("Continuing without wordnet...")
+    check_nltk_resource('stopwords', 'stopwords')
+    check_nltk_resource('wordnet', 'wordnet')
 
-    # --- Load Data ---
-    print("Loading data...")
-    train_df, val_df, test_df = data_handler.load_data(
-        config.TRAIN_PATH, config.VAL_PATH, config.TEST_PATH
+    # --- Load Data & Get Mappings ---
+    print("Loading data and deriving label mappings...")
+    train_df, val_df, test_df, label_to_int, int_to_label = data_handler.load_and_prepare_data(
+        config.TRAIN_PATH, config.VAL_PATH, config.TEST_PATH, config.LABEL_MAP_SAVE_PATH
     )
+    n_class = len(label_to_int) # Determine number of classes dynamically
+    print(f"Number of classes detected: {n_class}")
 
     # --- Preprocessing & Vocabulary ---
     print("Initializing TextPreprocessor...")
-    text_preprocessor = data_handler.TextPreprocessor(use_stopwords=False) # Can set True if desired
+    text_preprocessor = data_handler.TextPreprocessor(use_stopwords=False)
 
     print("Preprocessing training data...")
     train_tokens_list = text_preprocessor.preprocess_dataframe(train_df)
@@ -68,28 +65,28 @@ def run_training():
     print("Initializing and building Vocabulary...")
     vocabulary = data_handler.Vocabulary(freq_threshold=config.MIN_FREQ)
     vocabulary.build_vocabulary(train_tokens_list)
-
-    # Save vocabulary
     vocabulary.save(config.VOCAB_SAVE_PATH)
-    # Save basic preprocessor config (like use_stopwords) if needed for inference consistency
-    # preprocessor_config = {'use_stopwords': text_preprocessor.stopwords is not None}
-    # with open(config.PREPROCESSOR_SAVE_PATH, 'w') as f: json.dump(preprocessor_config, f)
+    vocab_size = len(vocabulary)
 
     # --- Numericalize and Prepare Datasets ---
     print("Numericalizing datasets...")
-    # Add SOS/EOS during numericalization
-    train_sequences = [[config.SOS_IDX] + vocabulary.numericalize(tokens)[:config.MAX_LENGTH] + [config.EOS_IDX] for tokens in train_tokens_list]
+    def numericalize_tokens(tokens_list, vocab, max_len):
+        return [
+            [config.SOS_IDX] + vocab.numericalize(tokens)[:max_len] + [config.EOS_IDX]
+            for tokens in tokens_list
+        ]
 
-    # Preprocess validation and test data
-    print("Preprocessing validation data...")
+    train_sequences = numericalize_tokens(train_tokens_list, vocabulary, config.MAX_LENGTH)
+
+    print("Preprocessing and numericalizing validation data...")
     val_tokens_list = text_preprocessor.preprocess_dataframe(val_df)
-    val_sequences = [[config.SOS_IDX] + vocabulary.numericalize(tokens)[:config.MAX_LENGTH] + [config.EOS_IDX] for tokens in val_tokens_list]
+    val_sequences = numericalize_tokens(val_tokens_list, vocabulary, config.MAX_LENGTH)
 
-    print("Preprocessing test data...")
+    print("Preprocessing and numericalizing test data...")
     test_tokens_list = text_preprocessor.preprocess_dataframe(test_df)
-    test_sequences = [[config.SOS_IDX] + vocabulary.numericalize(tokens)[:config.MAX_LENGTH] + [config.EOS_IDX] for tokens in test_tokens_list]
+    test_sequences = numericalize_tokens(test_tokens_list, vocabulary, config.MAX_LENGTH)
 
-    # Extract labels
+    # Extract integer labels (already mapped in load_and_prepare_data)
     train_labels = train_df['label'].to_numpy()
     val_labels = val_df['label'].to_numpy()
     test_labels = test_df['label'].to_numpy()
@@ -100,52 +97,37 @@ def run_training():
     val_dataset = data_handler.EmotionDataset(val_sequences, val_labels)
     test_dataset = data_handler.EmotionDataset(test_sequences, test_labels)
 
-    # Create DataLoaders with collate_fn for padding
+    # Create DataLoaders
     print("Creating DataLoaders...")
     train_loader = DataLoader(
-        dataset=train_dataset,
-        batch_size=config.BATCH_SIZE,
-        shuffle=config.SHUFFLE_DATA,
-        collate_fn=data_handler.collate_batch # Use custom collate
+        dataset=train_dataset, batch_size=config.BATCH_SIZE,
+        shuffle=config.SHUFFLE_DATA, collate_fn=data_handler.collate_batch
     )
     val_loader = DataLoader(
-        dataset=val_dataset,
-        batch_size=config.BATCH_SIZE,
-        shuffle=False,
-        collate_fn=data_handler.collate_batch
+        dataset=val_dataset, batch_size=config.BATCH_SIZE,
+        shuffle=False, collate_fn=data_handler.collate_batch
     )
     test_loader = DataLoader(
-        dataset=test_dataset,
-        batch_size=config.BATCH_SIZE,
-        shuffle=False,
-        collate_fn=data_handler.collate_batch
+        dataset=test_dataset, batch_size=config.BATCH_SIZE,
+        shuffle=False, collate_fn=data_handler.collate_batch
     )
 
     # --- Model Building ---
     print(f"Building model: {config.MODEL_TYPE}")
-    vocab_size = len(vocabulary) # Get actual vocab size
-
     if config.MODEL_TYPE == 'LSTM':
         model = models.LSTMNetwork(
             vocab_size=vocab_size,
             embedding_dim=config.EMBEDDING_DIM,
             hidden_dim=config.HIDDEN_DIM,
-            n_class=config.N_CLASS,
+            n_class=n_class, # Use dynamic class count
             n_layers=config.N_LAYERS,
-            pad_idx=PAD_IDX # Use defined PAD_IDX
+            pad_idx=PAD_IDX
         )
         optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE_LSTM)
-    # ANN model is not suitable in its current form for sequence indices
-    # elif config.MODEL_TYPE == 'ANN':
-    #     # Needs redesign to use embeddings or handle sequences
-    #     print("Warning: ANN model selected but is not directly suitable for sequence indices without modification.")
-    #     # Placeholder - this input size is wrong for sequences
-    #     model = models.ANN(input_size=config.MAX_LENGTH+2, n_class=config.N_CLASS)
-    #     optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE_ANN)
     else:
-        raise ValueError(f"Unsupported or unsuitable model type: {config.MODEL_TYPE} in config.py")
+        raise ValueError(f"Unsupported or unsuitable model type: {config.MODEL_TYPE}")
 
-    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX) # Optionally ignore padding in loss
+    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX)
     print(f"Model:\n{model}")
     print(f"Optimizer: {optimizer}")
     print(f"Criterion: {criterion}")
@@ -154,12 +136,12 @@ def run_training():
     print("Starting training...")
     trained_model, history_df = engine.trainer(
         model=model,
-        train_loader=train_loader, # Use the new DataLoader
+        train_loader=train_loader,
         optimizer=optimizer,
         criterion=criterion,
         epochs=config.EPOCHS,
         device=config.DEVICE,
-        val_loader=val_loader, # Use the new DataLoader
+        val_loader=val_loader,
         model_save_path=config.MODEL_SAVE_PATH
     )
 
@@ -169,17 +151,15 @@ def run_training():
 
     # --- Final Evaluation ---
     print("Evaluating final model on test set...")
-    # Ensure the best model is loaded if checkpointing was used
-    if os.path.exists(config.MODEL_SAVE_PATH):
-         print("Loading best saved model for final evaluation...")
-         # Use load_final_model if saving only state_dict, or load_checkpoint if saving full checkpoint
-         engine.load_checkpoint(config.MODEL_SAVE_PATH, trained_model, optimizer, config.DEVICE) # Load full checkpoint
-         # engine.load_final_model(trained_model, config.MODEL_SAVE_PATH, config.DEVICE) # Or load just state_dict
-
+    # Ensure the best model (if saved) or the last epoch model is used
+    if os.path.exists(config.MODEL_SAVE_PATH) and val_loader:
+         print("Reloading best saved model checkpoint for final evaluation...")
+         # Reload the state dict from the best checkpoint
+         engine.load_checkpoint(config.MODEL_SAVE_PATH, trained_model, optimizer=None, device=config.DEVICE)
 
     test_acc, test_loss = engine.evaluate(
         model=trained_model,
-        data_loader=test_loader, # Use the new DataLoader
+        data_loader=test_loader,
         criterion=criterion,
         device=config.DEVICE
     )
@@ -188,7 +168,7 @@ def run_training():
     print(f"Test Accuracy: {test_acc:.2f}%")
     print("-" * 30)
 
-    # Optionally save the very final model state if needed
+    # Optional: Save final model state_dict without optimizer state
     # engine.save_final_model(trained_model, config.MODEL_SAVE_PATH.replace('.pt', '_final.pt'))
 
     print("--- Training Pipeline Finished ---")
