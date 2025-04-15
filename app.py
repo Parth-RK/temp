@@ -124,7 +124,7 @@ if __name__ == "__main__":
                 loaded_model,
                 loaded_preprocessor,
                 loaded_vocab,
-                loaded_int_to_label, # Pass mapping
+                loaded_int_to_label,
                 config.DEVICE
             )
 

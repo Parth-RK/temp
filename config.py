@@ -17,8 +17,8 @@ TEST_PATH = os.path.join(BASE_DIR, "test.csv")
 ARTIFACTS_DIR = "artifacts"
 MODEL_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "emotion_model.pt")
 VOCAB_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "vocab.json")
-LABEL_MAP_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "label_map.json") # New path for mappings
-PREPROCESSOR_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "preprocessor_config.json") # Optional
+LABEL_MAP_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "label_map.json")
+PREPROCESSOR_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "preprocessor_config.json")
 RESULTS_PLOT_PATH = os.path.join(ARTIFACTS_DIR, "training_plots.png")
 
 # --- Preprocessing Parameters ---
