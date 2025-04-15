@@ -161,29 +161,34 @@ def create_label_mappings(train_df, label_column='label'):
     return label_to_int, int_to_label
 
 def save_label_mappings(mappings, filepath):
-    """Saves label mappings (label_to_int, int_to_label) to JSON."""
+    """Saves label mappings ensuring all keys are strings for JSON compatibility."""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+    label_to_int, int_to_label = mappings
+    label_to_int_str_keys = {str(k): v for k, v in label_to_int.items()}
+    int_to_label_str_keys = {str(k): v for k, v in int_to_label.items()}
+
     save_data = {
-        'label_to_int': mappings[0],
-        # Ensure int keys in int_to_label are strings for JSON compatibility
-        'int_to_label': {str(k): v for k, v in mappings[1].items()}
+        'label_to_int': label_to_int_str_keys,
+        'int_to_label': int_to_label_str_keys
     }
     with open(filepath, 'w') as f:
         json.dump(save_data, f, indent=4)
     print(f"Label mappings saved to {filepath}")
 
 def load_label_mappings(filepath):
-    """Loads label mappings from JSON."""
+    """Loads label mappings from JSON, converting int_to_label keys back to integers."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Label mapping file not found at {filepath}")
     with open(filepath, 'r') as f:
         loaded_data = json.load(f)
-    # Convert int_to_label keys back to integers
+    
+    label_to_int_loaded = loaded_data['label_to_int']
     int_to_label_loaded = {int(k): v for k, v in loaded_data['int_to_label'].items()}
-    mappings = (loaded_data['label_to_int'], int_to_label_loaded)
+
+    mappings = (label_to_int_loaded, int_to_label_loaded)
     print(f"Label mappings loaded from {filepath}. Num classes: {len(mappings[0])}")
     return mappings
-
 
 def load_and_prepare_data(train_path, val_path, test_path, label_map_save_path):
     """Loads data, creates label mappings, maps labels, and saves mappings."""
