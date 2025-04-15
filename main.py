@@ -6,11 +6,11 @@ import nltk
 from torch.utils.data import DataLoader
 import sys
 import json
-import numpy as np
+import numpy as np # Make sure numpy is imported
 
 import config
 import data_handler
-import models
+import models # Import the updated models module
 import engine
 
 PAD_IDX = config.PAD_IDX
@@ -30,16 +30,21 @@ def check_nltk_resource(resource_id, resource_name):
             else:
                  print(f"Continuing without '{resource_name}'...")
 
+# --- Helper to get sequence lengths ---
+# Add this function before run_training or inside it
+def get_sequence_lengths(sequences):
+    return torch.tensor([len(s) for s in sequences], dtype=torch.long)
+
+
 def run_training():
     print("--- Starting Emotion Classification Training ---")
     print(f"Using device: {config.DEVICE}")
-    print(f"Selected model type: {config.MODEL_TYPE}")
+    print(f"Selected model type: {config.MODEL_TYPE}") # Prints the selected model type
 
     os.makedirs(config.ARTIFACTS_DIR, exist_ok=True)
     check_nltk_resource('stopwords', 'stopwords')
     check_nltk_resource('wordnet', 'wordnet')
 
-    # --- Load Label Map Separately First (If it exists) ---
     int_to_label_map = None
     if os.path.exists(config.LABEL_MAP_SAVE_PATH):
         try:
@@ -73,28 +78,25 @@ def run_training():
         train_df_display = train_df.copy()
         train_df_display['label_str'] = train_df_display['label'].map(int_to_label_map)
         data_handler.plot_class_distribution(
-            train_df_display,
-            label_column='label_str',
+            train_df_display, label_column='label_str',
             title="Training Set Class Distribution",
             save_path=os.path.join(config.ARTIFACTS_DIR, "train_class_distribution.png")
         )
     else:
          data_handler.plot_class_distribution(
-            train_df,
-            label_column='label',
+            train_df, label_column='label',
             title="Training Set Class Distribution (Integer Labels)",
             save_path=os.path.join(config.ARTIFACTS_DIR, "train_class_distribution.png")
         )
 
     print("\nInitializing TextPreprocessor...")
-    text_preprocessor = data_handler.TextPreprocessor(use_stopwords=True)
+    text_preprocessor = data_handler.TextPreprocessor(use_stopwords=False)
 
-    print("Preprocessing training data (for sequence length analysis)...")
+    print("Preprocessing training data (for analysis and vocab)...")
     train_tokens_list = text_preprocessor.preprocess_dataframe(train_df)
-
     data_handler.plot_sequence_lengths(
         train_tokens_list,
-        title="Training Sequence Length Distribution (Before Padding)",
+        title="Training Sequence Length Distribution (Before Padding/Truncation)",
         save_path=os.path.join(config.ARTIFACTS_DIR, "train_seq_length_distribution.png")
     )
 
@@ -109,72 +111,124 @@ def run_training():
     def numericalize_tokens(tokens_list, vocab, max_len):
         numericalized = []
         for tokens in tokens_list:
-             truncated_tokens = tokens[:max_len-2]
+             truncated_tokens = tokens[:max_len-2] # Account for SOS/EOS
              seq = [config.SOS_IDX] + vocab.numericalize(truncated_tokens) + [config.EOS_IDX]
              numericalized.append(seq)
         return numericalized
 
     train_sequences = numericalize_tokens(train_tokens_list, vocabulary, config.MAX_LENGTH)
-
     print("Preprocessing and numericalizing validation data...")
     val_tokens_list = text_preprocessor.preprocess_dataframe(val_df)
     val_sequences = numericalize_tokens(val_tokens_list, vocabulary, config.MAX_LENGTH)
-
     print("Preprocessing and numericalizing test data...")
     test_tokens_list = text_preprocessor.preprocess_dataframe(test_df)
     test_sequences = numericalize_tokens(test_tokens_list, vocabulary, config.MAX_LENGTH)
+
+    # --- Get Sequence Lengths BEFORE Padding ---
+    # We need these for potential masking in attention or packed sequences
+    train_seq_lengths = get_sequence_lengths(train_sequences)
+    val_seq_lengths = get_sequence_lengths(val_sequences)
+    test_seq_lengths = get_sequence_lengths(test_sequences)
 
     train_labels = train_df['label'].to_numpy(dtype=np.int64)
     val_labels = val_df['label'].to_numpy(dtype=np.int64)
     test_labels = test_df['label'].to_numpy(dtype=np.int64)
 
+
     print("Creating PyTorch Datasets...")
-    train_dataset = data_handler.EmotionDataset(train_sequences, train_labels)
+    # Modify Dataset to include sequence lengths if needed by collate_fn
+    train_dataset = data_handler.EmotionDataset(train_sequences, train_labels) # Keep simple for now
     val_dataset = data_handler.EmotionDataset(val_sequences, val_labels)
     test_dataset = data_handler.EmotionDataset(test_sequences, test_labels)
 
     print("Creating DataLoaders...")
+    # Modify collate_batch to handle lengths if needed for model forward pass
+    # Let's modify it directly here for simplicity, or update data_handler.py
+    def collate_batch_with_lengths(batch):
+        label_list, text_list, lengths_list = [], [], []
+        for (_text, _label) in batch:
+            label_list.append(_label)
+            processed_text = torch.tensor(_text, dtype=torch.long)
+            text_list.append(processed_text)
+            lengths_list.append(len(processed_text)) # Get length before padding
+
+        padded_texts = nn.utils.rnn.pad_sequence(text_list, batch_first=True, padding_value=PAD_IDX)
+        labels = torch.tensor(label_list, dtype=torch.long) # Use torch.tensor directly
+        lengths = torch.tensor(lengths_list, dtype=torch.long)
+
+        # Optional: Sort batch by sequence length (required by pack_padded_sequence)
+        # lengths, sort_idx = lengths.sort(dim=0, descending=True)
+        # padded_texts = padded_texts[sort_idx]
+        # labels = labels[sort_idx]
+        # We are not using packed sequences currently, so sorting is not strictly necessary
+        # but good practice if you plan to use it. The attention mask handles padding.
+
+        return padded_texts, labels, lengths # Return lengths as well
+
+
     pin_memory = config.DEVICE == "cuda"
     train_loader = DataLoader(
         dataset=train_dataset, batch_size=config.BATCH_SIZE,
-        shuffle=config.SHUFFLE_DATA, collate_fn=data_handler.collate_batch,
+        shuffle=config.SHUFFLE_DATA, collate_fn=collate_batch_with_lengths, # Use updated collate function
         num_workers=config.NUM_WORKERS, pin_memory=pin_memory
     )
     val_loader = DataLoader(
         dataset=val_dataset, batch_size=config.BATCH_SIZE,
-        shuffle=False, collate_fn=data_handler.collate_batch,
+        shuffle=False, collate_fn=collate_batch_with_lengths, # Use updated collate function
         num_workers=config.NUM_WORKERS, pin_memory=pin_memory
     )
     test_loader = DataLoader(
         dataset=test_dataset, batch_size=config.BATCH_SIZE,
-        shuffle=False, collate_fn=data_handler.collate_batch,
+        shuffle=False, collate_fn=collate_batch_with_lengths, # Use updated collate function
         num_workers=config.NUM_WORKERS, pin_memory=pin_memory
     )
 
-    print(f"Building model: {config.MODEL_TYPE}")
-    if config.MODEL_TYPE == 'LSTM':
+    print(f"\nBuilding model: {config.MODEL_TYPE}")
+
+    # --- Model Instantiation Logic ---
+    if config.MODEL_TYPE == 'CNN_RNN_Attention':
+        model = models.CNN_RNN_Attention(
+            vocab_size=vocab_size,
+            embedding_dim=config.EMBEDDING_DIM,
+            cnn_out_channels=config.CNN_OUT_CHANNELS,
+            cnn_kernel_sizes=config.CNN_KERNEL_SIZES,
+            rnn_type=config.RNN_TYPE, # Pass 'lstm' or 'gru'
+            rnn_hidden_dim=config.RNN_HIDDEN_DIM,
+            rnn_layers=config.RNN_LAYERS,
+            n_class=n_class,
+            dropout_prob=config.DROPOUT_PROB,
+            pad_idx=PAD_IDX
+        )
+    elif config.MODEL_TYPE == 'LSTM': # Fallback to simple LSTM if specified
         model = models.LSTMNetwork(
             vocab_size=vocab_size,
             embedding_dim=config.EMBEDDING_DIM,
-            hidden_dim=config.HIDDEN_DIM,
+            hidden_dim=config.RNN_HIDDEN_DIM, # Use RNN_HIDDEN_DIM for consistency
             n_class=n_class,
-            n_layers=config.N_LAYERS,
+            n_layers=config.RNN_LAYERS, # Use RNN_LAYERS for consistency
             pad_idx=PAD_IDX,
             dropout_prob=config.DROPOUT_PROB
         )
+    # Add elif for simple GRU if needed
     else:
-        raise ValueError(f"Unsupported model type: {config.MODEL_TYPE}")
+        raise ValueError(f"Unsupported MODEL_TYPE in config: {config.MODEL_TYPE}")
 
-    optimizer = optim.AdamW(model.parameters(), lr=config.LEARNING_RATE_LSTM, weight_decay=config.WEIGHT_DECAY)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX)
+    optimizer = optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
+    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX) # Add class weights here if needed
 
-    print(f"Model:\n{model}")
+    print(f"Model:\n{model}") # Print model structure
     print(f"Optimizer: {optimizer}")
     print(f"Criterion: {criterion}")
 
+    # --- Modify engine calls to handle sequence lengths if needed ---
+    # The current 'evaluate' and 'trainer' in engine.py don't explicitly use lengths,
+    # but the model's forward pass does. We pass lengths via the DataLoader.
+    # We need to update the trainer/evaluate loops slightly if we want to pass lengths to the model.
+
     print("\nStarting training...")
-    trained_model, history_df = engine.trainer(
+    # We need to modify the engine slightly to accept and pass lengths
+    trained_model, history_df = engine.trainer_with_lengths( # Use a modified trainer function
         model=model,
         train_loader=train_loader,
         optimizer=optimizer,
@@ -186,7 +240,7 @@ def run_training():
     )
 
     print("\nPlotting training history...")
-    engine.plot_history(history_df, config.RESULTS_PLOT_PATH)
+    engine.plot_history(history_df, config.RESULTS_PLOT_PATH) # Existing plot function is fine
 
     print("\nEvaluating final model on test set...")
     if int_to_label_map is None:
@@ -194,27 +248,34 @@ def run_training():
          max_label = test_df['label'].max()
          int_to_label_map = {i: str(i) for i in range(max_label + 1)}
 
-    engine.generate_test_report(
+    # Use a modified test report function that passes lengths
+    engine.generate_test_report_with_lengths(
         model=trained_model,
         data_loader=test_loader,
         criterion=criterion,
         device=config.DEVICE,
         int_to_label_map=int_to_label_map,
-        report_save_path=os.path.join(config.ARTIFACTS_DIR, "test_classification_report.txt"),
-        conf_matrix_save_path=os.path.join(config.ARTIFACTS_DIR, "test_confusion_matrix.png")
+        report_save_path=config.TEST_REPORT_PATH,
+        conf_matrix_save_path=config.CONFUSION_MATRIX_PATH
     )
 
     print("\n--- Training Pipeline Finished ---")
 
+
 if __name__ == "__main__":
-    if not hasattr(config, 'NUM_WORKERS'):
-        config.NUM_WORKERS = 0
-        print("Setting config.NUM_WORKERS to default 0")
-    if not hasattr(config, 'DROPOUT_PROB'):
-        config.DROPOUT_PROB = 0.5
-        print("Setting config.DROPOUT_PROB to default 0.5")
-    if not hasattr(config, 'WEIGHT_DECAY'):
-        config.WEIGHT_DECAY = 0.0
-        print("Setting config.WEIGHT_DECAY to default 0.0")
+    # Add defaults for new config vars if not present
+    if not hasattr(config, 'NUM_WORKERS'): config.NUM_WORKERS = 0
+    if not hasattr(config, 'DROPOUT_PROB'): config.DROPOUT_PROB = 0.5
+    if not hasattr(config, 'WEIGHT_DECAY'): config.WEIGHT_DECAY = 0.0
+    if not hasattr(config, 'CNN_OUT_CHANNELS'): config.CNN_OUT_CHANNELS = 100
+    if not hasattr(config, 'CNN_KERNEL_SIZES'): config.CNN_KERNEL_SIZES = [3, 4, 5]
+    if not hasattr(config, 'RNN_TYPE'): config.RNN_TYPE = 'lstm'
+    if not hasattr(config, 'RNN_HIDDEN_DIM'): config.RNN_HIDDEN_DIM = 256
+    if not hasattr(config, 'RNN_LAYERS'): config.RNN_LAYERS = 2
+    if not hasattr(config, 'LEARNING_RATE'): config.LEARNING_RATE = 0.001
+    # Add paths if missing
+    if not hasattr(config, 'TEST_REPORT_PATH'): config.TEST_REPORT_PATH = os.path.join(config.ARTIFACTS_DIR, "test_classification_report.txt")
+    if not hasattr(config, 'CONFUSION_MATRIX_PATH'): config.CONFUSION_MATRIX_PATH = os.path.join(config.ARTIFACTS_DIR, "test_confusion_matrix.png")
+
 
     run_training()
