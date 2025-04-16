@@ -215,8 +215,7 @@ def run_training():
 
 
     optimizer = optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
-    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX) # Add class weights here if needed
-
+    criterion = nn.CrossEntropyLoss()
     print(f"Model:\n{model}") # Print model structure
     print(f"Optimizer: {optimizer}")
     print(f"Criterion: {criterion}")
@@ -263,19 +262,4 @@ def run_training():
 
 
 if __name__ == "__main__":
-    # Add defaults for new config vars if not present
-    if not hasattr(config, 'NUM_WORKERS'): config.NUM_WORKERS = 0
-    if not hasattr(config, 'DROPOUT_PROB'): config.DROPOUT_PROB = 0.5
-    if not hasattr(config, 'WEIGHT_DECAY'): config.WEIGHT_DECAY = 0.0
-    if not hasattr(config, 'CNN_OUT_CHANNELS'): config.CNN_OUT_CHANNELS = 100
-    if not hasattr(config, 'CNN_KERNEL_SIZES'): config.CNN_KERNEL_SIZES = [3, 4, 5]
-    if not hasattr(config, 'RNN_TYPE'): config.RNN_TYPE = 'lstm'
-    if not hasattr(config, 'RNN_HIDDEN_DIM'): config.RNN_HIDDEN_DIM = 256
-    if not hasattr(config, 'RNN_LAYERS'): config.RNN_LAYERS = 2
-    if not hasattr(config, 'LEARNING_RATE'): config.LEARNING_RATE = 0.001
-    # Add paths if missing
-    if not hasattr(config, 'TEST_REPORT_PATH'): config.TEST_REPORT_PATH = os.path.join(config.ARTIFACTS_DIR, "test_classification_report.txt")
-    if not hasattr(config, 'CONFUSION_MATRIX_PATH'): config.CONFUSION_MATRIX_PATH = os.path.join(config.ARTIFACTS_DIR, "test_confusion_matrix.png")
-
-
     run_training()

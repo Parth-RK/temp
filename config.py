@@ -50,19 +50,14 @@ RNN_LAYERS = 2
 # --- Training ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
-EPOCHS =100
+EPOCHS = 10
 LEARNING_RATE = 0.005 # Single LR for now, might need tuning
 WEIGHT_DECAY = 1e-5 # Weight decay for AdamW optimizer
 SHUFFLE_DATA = True
-NUM_WORKERS = 4 # Dataloader workers
+NUM_WORKERS = 0 # Dataloader workers
 
 # --- Preprocessing ---
 SPACY_MODEL = "en_core_web_md" # Use 'md' or 'lg' for better vectors if using spaCy vectors later
 
 # --- Prediction ---
-TOP_K_PREDICTIONS = 3 # For app.py if used
-
-# --- Flag for simple LSTM ---
-# If you want to quickly switch back to the old LSTM model without changing
-# MODEL_TYPE constantly, you could use a flag, but changing MODEL_TYPE is clearer.
-# USE_SIMPLE_LSTM = False
+TOP_K_PREDICTIONS = 3 # Number of top predictions to show
