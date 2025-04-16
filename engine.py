@@ -1,242 +1,277 @@
+# --- engine.py ---
 import torch
 import torch.nn as nn
-import pandas as pd
-import matplotlib.pylab as plt
-import seaborn as sns
-import os
-from tqdm import tqdm
-import config
-from sklearn.metrics import precision_recall_fscore_support, accuracy_score, confusion_matrix, classification_report
+import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from transformers import get_linear_schedule_with_warmup, AdamW
+from tqdm.auto import tqdm
+import numpy as np
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
-def evaluate_with_lengths(model, data_loader, criterion, device):
+import config # Import configuration
+
+# --- Model Initialization ---
+
+def initialize_model(model_type, n_classes, vocab_size=None):
+    """Initializes the model based on the configuration."""
+    print(f"\nInitializing model: {model_type}")
+    if model_type == 'Transformer':
+        from models import TransformerClassifier # Local import
+        model = TransformerClassifier(
+            model_name=config.TRANSFORMER_MODEL_NAME,
+            n_classes=n_classes
+        )
+    elif model_type == 'CNN_RNN_Attention':
+        from models import CNN_RNN_Attention # Local import
+        if vocab_size is None: raise ValueError("vocab_size required for CNN_RNN_Attention")
+        model = CNN_RNN_Attention(
+            vocab_size=vocab_size,
+            embedding_dim=config.EMBEDDING_DIM,
+            cnn_out_channels=config.CNN_OUT_CHANNELS,
+            cnn_kernel_sizes=config.CNN_KERNEL_SIZES,
+            rnn_type=config.RNN_TYPE,
+            rnn_hidden_dim=config.RNN_HIDDEN_DIM,
+            rnn_layers=config.RNN_LAYERS,
+            n_class=n_classes,
+            dropout_prob=config.WEIGHT_DECAY, # Using WEIGHT_DECAY as dropout here might be unintended? Use a separate DROPOUT_PROB config? Let's assume a default or add it.
+            pad_idx=config.PAD_IDX
+        )
+    elif model_type == 'LSTM':
+        from models import LSTMNetwork # Local import
+        if vocab_size is None: raise ValueError("vocab_size required for LSTM")
+        model = LSTMNetwork(
+            vocab_size=vocab_size,
+            embedding_dim=config.EMBEDDING_DIM,
+            hidden_dim=config.RNN_HIDDEN_DIM,
+            n_class=n_classes,
+            n_layers=config.RNN_LAYERS,
+            pad_idx=config.PAD_IDX,
+            dropout_prob=config.WEIGHT_DECAY # Same potential issue as above
+        )
+    else:
+        raise ValueError(f"Unsupported MODEL_TYPE in config: {model_type}")
+
+    model.to(config.DEVICE)
+    print(f"Model loaded on {config.DEVICE}")
+    # Print parameter count
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total Parameters: {total_params:,}")
+    print(f"Trainable Parameters: {trainable_params:,}")
+    return model
+
+# --- Optimizer and Scheduler ---
+
+def initialize_optimizer_scheduler(model, optimizer_type, scheduler_type, num_train_steps=None):
+    """Initializes optimizer and scheduler based on config."""
+    print(f"\nInitializing Optimizer: {optimizer_type}, Scheduler: {scheduler_type}")
+
+    if optimizer_type == 'AdamW':
+        # Differentiate parameters for weight decay (common for Transformers)
+        no_decay = ["bias", "LayerNorm.weight", "LayerNorm.bias"]
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and p.requires_grad],
+             'weight_decay': config.WEIGHT_DECAY},
+            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and p.requires_grad],
+             'weight_decay': 0.0}
+        ]
+        optimizer = AdamW(optimizer_grouped_parameters, lr=config.LEARNING_RATE)
+    elif optimizer_type == 'Adam':
+        optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
+    elif optimizer_type == 'SGD':
+        optimizer = optim.SGD(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY, momentum=0.9)
+    else:
+        raise ValueError(f"Unsupported OPTIMIZER_TYPE: {optimizer_type}")
+
+    scheduler = None
+    if scheduler_type == 'linear_warmup':
+        if num_train_steps is None:
+            raise ValueError("num_train_steps is required for linear_warmup scheduler")
+        num_warmup_steps = int(num_train_steps * config.WARMUP_PROPORTION)
+        print(f"  Warmup Steps: {num_warmup_steps} (of {num_train_steps} total)")
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=num_train_steps
+        )
+    elif scheduler_type == 'reduce_on_plateau':
+        # Monitors validation loss by default
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
+    elif scheduler_type is not None:
+        print(f"Warning: Scheduler type '{scheduler_type}' requested but not implemented. No scheduler used.")
+
+
+    return optimizer, scheduler
+
+# --- Loss Function ---
+criterion = nn.CrossEntropyLoss()
+
+# --- Training Step ---
+
+def train_step(model, data_loader, optimizer, device, scheduler=None, grad_clip_value=None):
+    """Performs a single training epoch."""
+    model.train()
+    total_loss = 0
+    progress_bar = tqdm(data_loader, desc="Training", leave=False)
+
+    for batch in progress_bar:
+        optimizer.zero_grad()
+
+        # Adapt input based on model type (derived from batch structure)
+        if config.MODEL_TYPE == 'Transformer':
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        else: # Non-transformer models (LSTM, CNN_RNN)
+            # Assumes collate function returns (sequences, labels, lengths)
+            sequences = batch[0].to(device)
+            labels = batch[1].to(device)
+            lengths = batch[2].to(device) # Pass lengths to model
+            outputs = model(text_indices=sequences, sequence_lengths=lengths)
+
+        loss = criterion(outputs, labels)
+        loss.backward()
+
+        # Gradient Clipping
+        if grad_clip_value:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_value)
+
+        optimizer.step()
+        if scheduler and config.SCHEDULER_TYPE == 'linear_warmup': # Step scheduler every batch for warmup
+            scheduler.step()
+
+        total_loss += loss.item()
+        progress_bar.set_postfix({'loss': f'{loss.item():.4f}', 'lr': f'{optimizer.param_groups[0]["lr"]:.1e}'})
+
+    avg_loss = total_loss / len(data_loader)
+    return avg_loss
+
+# --- Evaluation Step ---
+
+def evaluate_step(model, data_loader, device):
+    """Performs evaluation on a dataset."""
     model.eval()
     total_loss = 0
     all_preds = []
     all_labels = []
-    with torch.inference_mode():
-        for X, y, lengths in data_loader:
-            X, y, lengths = X.to(device), y.to(device), lengths.to(device)
-            import inspect
-            sig = inspect.signature(model.forward)
-            if 'sequence_lengths' in sig.parameters:
-                 y_pred_logits = model(X, sequence_lengths=lengths)
-            else:
-                 y_pred_logits = model(X)
-            batch_loss = criterion(y_pred_logits, y)
-            total_loss += batch_loss.item()
-            y_pred_class = torch.softmax(y_pred_logits, dim=1).argmax(dim=1)
-            all_preds.extend(y_pred_class.cpu().numpy())
-            all_labels.extend(y.cpu().numpy())
+    progress_bar = tqdm(data_loader, desc="Evaluating", leave=False)
+
+    with torch.no_grad():
+        for batch in progress_bar:
+            # Adapt input based on model type
+            if config.MODEL_TYPE == 'Transformer':
+                input_ids = batch["input_ids"].to(device)
+                attention_mask = batch["attention_mask"].to(device)
+                labels = batch["labels"].to(device)
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            else: # Non-transformer
+                sequences = batch[0].to(device)
+                labels = batch[1].to(device)
+                lengths = batch[2].to(device)
+                outputs = model(text_indices=sequences, sequence_lengths=lengths)
+
+            loss = criterion(outputs, labels)
+            total_loss += loss.item()
+
+            preds = torch.argmax(outputs, dim=1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+            progress_bar.set_postfix({'loss': f'{loss.item():.4f}'})
+
     avg_loss = total_loss / len(data_loader)
+    accuracy = accuracy_score(all_labels, all_preds)
+    # Calculate weighted precision, recall, F1
     precision, recall, f1, _ = precision_recall_fscore_support(
         all_labels, all_preds, average='weighted', zero_division=0
     )
-    accuracy = accuracy_score(all_labels, all_preds) * 100
-    return accuracy, avg_loss, precision, recall, f1
 
-def trainer_with_lengths(model, train_loader, optimizer, criterion, epochs, device, val_loader=None, model_save_path=None, scheduler=None):
-    history = {"train_loss": [], "train_acc": [], "train_precision": [], "train_recall": [], "train_f1": [], "epoch": []}
-    if val_loader:
-        history["val_loss"] = []
-        history["val_acc"] = []
-        history["val_precision"] = []
-        history["val_recall"] = []
-        history["val_f1"] = []
-    best_val_metric = float('inf')
-    metric_to_optimize = "val_loss"
-    model.to(device)
-    print(f"Starting training on {device} for {epochs} epochs...")
-    print(f"Optimizing based on: {metric_to_optimize}")
-    import inspect
-    sig = inspect.signature(model.forward)
-    model_accepts_lengths = 'sequence_lengths' in sig.parameters
-    if model_accepts_lengths:
-         print("Model forward method accepts 'sequence_lengths'.")
-    else:
-         print("Model forward method does NOT accept 'sequence_lengths'.")
-    for epoch in range(1, epochs + 1):
-        model.train()
-        epoch_loss = 0
-        progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch}/{epochs} [Train]")
-        for batch_idx, (X, y, lengths) in progress_bar:
-            X, y, lengths = X.to(device), y.to(device), lengths.to(device)
-            if model_accepts_lengths:
-                y_pred_logits = model(X, sequence_lengths=lengths)
-            else:
-                y_pred_logits = model(X)
-            loss = criterion(y_pred_logits, y)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item()
-            progress_bar.set_postfix({'loss': f'{loss.item():.4f}'})
-        print(f"\n--- Evaluating Epoch {epoch} ---")
-        print("Evaluating on Training Set...")
-        train_acc, train_loss, train_precision, train_recall, train_f1 = evaluate_with_lengths(model, train_loader, criterion, device)
-        history["train_loss"].append(train_loss)
-        history["train_acc"].append(train_acc)
-        history["train_precision"].append(train_precision)
-        history["train_recall"].append(train_recall)
-        history["train_f1"].append(train_f1)
-        log_message = (f"Epoch: {epoch}/{epochs} | "
-                       f"Train Loss: {train_loss:.4f}, Acc: {train_acc:.2f}%, P: {train_precision:.3f}, R: {train_recall:.3f}, F1: {train_f1:.3f}")
-        current_val_metric = float('inf')
-        if val_loader:
-            print("Evaluating on Validation Set...")
-            val_acc, val_loss, val_precision, val_recall, val_f1 = evaluate_with_lengths(model, val_loader, criterion, device)
-            history["val_loss"].append(val_loss)
-            history["val_acc"].append(val_acc)
-            history["val_precision"].append(val_precision)
-            history["val_recall"].append(val_recall)
-            history["val_f1"].append(val_f1)
-            log_message += (f" | Val Loss: {val_loss:.4f}, Acc: {val_acc:.2f}%, P: {val_precision:.3f}, R: {val_recall:.3f}, F1: {val_f1:.3f}")
-            if metric_to_optimize == "val_loss":
-                 current_val_metric = val_loss
-                 is_better = current_val_metric < best_val_metric
-            elif metric_to_optimize == "val_f1":
-                 current_val_metric = val_f1
-                 is_better = current_val_metric > best_val_metric
-            else:
-                 current_val_metric = val_loss
-                 is_better = current_val_metric < best_val_metric
-            if is_better and model_save_path:
-                best_val_metric = current_val_metric
-                save_checkpoint(model, optimizer, epoch, model_save_path)
-                log_message += " ✨ Best Model Saved ✨"
-        if scheduler:
-            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                 scheduler.step(current_val_metric)
-            else:
-                 scheduler.step()
-        history["epoch"].append(epoch)
-        print(log_message)
-        print("-" * 70)
-    print("Training Finished.")
-    if model_save_path and os.path.exists(model_save_path) and val_loader:
-         print(f"Loading best model from {model_save_path} based on {metric_to_optimize}.")
-         load_checkpoint(model_save_path, model, optimizer=None, device=device)
-    return model, pd.DataFrame(history)
-
-def plot_history(df, save_path=None):
-    num_rows = 1
-    if "train_precision" in df.columns: num_rows +=1
-    if "train_f1" in df.columns: num_rows += 1
-    plt.figure(figsize=(12, 6 * num_rows))
-    sns.set_style("whitegrid")
-    plot_index = 1
-    plt.subplot(num_rows, 2, plot_index); plot_index += 1
-    plt.plot(df["epoch"], df["train_loss"], label="Train Loss", marker='o', markersize=4)
-    if "val_loss" in df.columns: plt.plot(df["epoch"], df["val_loss"], label="Validation Loss", marker='x', markersize=5)
-    plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.title("Loss vs. Epoch"); plt.legend(); plt.grid(True)
-    plt.subplot(num_rows, 2, plot_index); plot_index += 1
-    plt.plot(df["epoch"], df["train_acc"], label="Train Accuracy", marker='o', markersize=4)
-    if "val_acc" in df.columns: plt.plot(df["epoch"], df["val_acc"], label="Validation Accuracy", marker='x', markersize=5)
-    plt.xlabel("Epoch"); plt.ylabel("Accuracy (%)"); plt.title("Accuracy vs. Epoch"); plt.legend(); plt.grid(True)
-    if "train_precision" in df.columns:
-        plt.subplot(num_rows, 2, plot_index); plot_index += 1
-        plt.plot(df["epoch"], df["train_precision"], label="Train Precision (W)", marker='o', markersize=4, linestyle='--')
-        plt.plot(df["epoch"], df["train_recall"], label="Train Recall (W)", marker='s', markersize=4, linestyle=':')
-        if "val_precision" in df.columns:
-            plt.plot(df["epoch"], df["val_precision"], label="Val Precision (W)", marker='x', markersize=5, linestyle='--')
-            plt.plot(df["epoch"], df["val_recall"], label="Val Recall (W)", marker='P', markersize=5, linestyle=':')
-        plt.xlabel("Epoch"); plt.ylabel("Score"); plt.title("Weighted Precision & Recall vs. Epoch"); plt.legend(); plt.grid(True)
-    if "train_f1" in df.columns:
-        if "train_precision" not in df.columns:
-             plt.subplot(num_rows, 2, plot_index); plot_index += 1
-        else:
-             plt.subplot(num_rows, 2, plot_index); plot_index += 1
-        plt.plot(df["epoch"], df["train_f1"], label="Train F1 (Weighted)", marker='o', markersize=4)
-        if "val_f1" in df.columns:
-            plt.plot(df["epoch"], df["val_f1"], label="Validation F1 (Weighted)", marker='x', markersize=5)
-        plt.xlabel("Epoch"); plt.ylabel("F1-Score"); plt.title("Weighted F1-Score vs. Epoch"); plt.legend(); plt.grid(True)
-    plt.tight_layout()
-    if save_path:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path)
-        print(f"Training plots saved to {save_path}")
-    plt.show()
-
-def generate_test_report_with_lengths(model, data_loader, criterion, device, int_to_label_map, report_save_path=None, conf_matrix_save_path=None):
-    print("\n--- Generating Final Test Report ---")
-    model.eval()
-    all_preds = []
-    all_labels = []
-    total_loss = 0
-    import inspect
-    sig = inspect.signature(model.forward)
-    model_accepts_lengths = 'sequence_lengths' in sig.parameters
-    with torch.inference_mode():
-        for X, y, lengths in tqdm(data_loader, desc="Test Evaluation"):
-            X, y, lengths = X.to(device), y.to(device), lengths.to(device)
-            if model_accepts_lengths:
-                 y_pred_logits = model(X, sequence_lengths=lengths)
-            else:
-                 y_pred_logits = model(X)
-            loss = criterion(y_pred_logits, y)
-            total_loss += loss.item()
-            y_pred_class = torch.softmax(y_pred_logits, dim=1).argmax(dim=1)
-            all_preds.extend(y_pred_class.cpu().numpy())
-            all_labels.extend(y.cpu().numpy())
-    avg_loss = total_loss / len(data_loader)
-    accuracy = accuracy_score(all_labels, all_preds) * 100
-    print(f"\nTest Loss: {avg_loss:.5f}")
-    print(f"Test Accuracy: {accuracy:.2f}%")
-    label_names = [int_to_label_map.get(i, str(i)) for i in sorted(int_to_label_map.keys())]
-    present_labels = np.unique(np.concatenate((all_labels, all_preds)))
-    present_label_names = [int_to_label_map.get(i, str(i)) for i in present_labels]
-    report = classification_report(all_labels, all_preds, labels=present_labels, target_names=present_label_names, zero_division=0, digits=3)
-    print("\nClassification Report:")
-    print(report)
-    if report_save_path:
-        os.makedirs(os.path.dirname(report_save_path), exist_ok=True)
-        with open(report_save_path, 'w') as f:
-            f.write(f"Test Loss: {avg_loss:.5f}\n")
-            f.write(f"Test Accuracy: {accuracy:.2f}%\n\n")
-            f.write("Classification Report:\n")
-            f.write(report)
-        print(f"Classification report saved to {report_save_path}")
-    cm = confusion_matrix(all_labels, all_preds, labels=present_labels)
-    plt.figure(figsize=(max(8, len(present_label_names)*0.6), max(6, len(present_label_names)*0.5)))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=present_label_names, yticklabels=present_label_names)
-    plt.xlabel('Predicted Label')
-    plt.ylabel('True Label')
-    plt.title('Confusion Matrix')
-    plt.xticks(rotation=45, ha='right')
-    plt.yticks(rotation=0)
-    plt.tight_layout()
-    if conf_matrix_save_path:
-        os.makedirs(os.path.dirname(conf_matrix_save_path), exist_ok=True)
-        plt.savefig(conf_matrix_save_path)
-        print(f"Confusion matrix saved to {conf_matrix_save_path}")
-    plt.show()
-
-def save_checkpoint(model, optimizer, epoch, filepath):
-    print(f"Saving checkpoint to {filepath}...")
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
+    metrics = {
+        'loss': avg_loss,
+        'accuracy': accuracy,
+        'precision_weighted': precision,
+        'recall_weighted': recall,
+        'f1_weighted': f1,
+        'predictions': all_preds, # Return predictions for detailed analysis
+        'true_labels': all_labels # Return true labels
     }
-    torch.save(checkpoint, filepath)
-    print("Checkpoint saved.")
+    return metrics
 
-def load_checkpoint(filepath, model, optimizer=None, device='cpu'):
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Checkpoint file not found at {filepath}")
-    print(f"Loading checkpoint from {filepath}...")
-    checkpoint = torch.load(filepath, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    if optimizer and 'optimizer_state_dict' in checkpoint:
-        try:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        except ValueError as e:
-            print(f"Warning: Could not load optimizer state dict. {e}")
-            print("Optimizer state will be reset.")
-    else:
-         print("Info: Optimizer state not loaded (not found or optimizer not provided).")
-    epoch = checkpoint.get('epoch', 'N/A')
-    print(f"Checkpoint loaded. Model weights loaded from epoch {epoch}.")
-    model.to(device)
-    return checkpoint.get('epoch', 0)
+
+# --- Training Loop ---
+
+def train_model(model, train_loader, val_loader, optimizer, scheduler, device, epochs, model_save_path, metric_for_best=config.METRIC_FOR_BEST_MODEL):
+    """The main training loop."""
+    history = {'train_loss': [], 'val_loss': [], 'val_accuracy': [], 'val_f1_weighted': []}
+    best_metric_value = -float('inf') if metric_for_best != 'loss' else float('inf')
+    grad_clip_value = config.GRADIENT_CLIP_VALUE if config.MODEL_TYPE == 'Transformer' else None # Only clip for transformers by default
+
+    print(f"\n--- Starting Training for {epochs} Epochs ---")
+    print(f"Monitoring validation '{metric_for_best}' for best model.")
+    if grad_clip_value: print(f"Using gradient clipping: {grad_clip_value}")
+
+    for epoch in range(1, epochs + 1):
+        print(f"\nEpoch {epoch}/{epochs}")
+
+        # Training
+        train_loss = train_step(model, train_loader, optimizer, device, scheduler, grad_clip_value)
+        print(f"  Train Loss: {train_loss:.4f}")
+        history['train_loss'].append(train_loss)
+
+        # Validation
+        val_metrics = evaluate_step(model, val_loader, device)
+        val_loss = val_metrics['loss']
+        val_accuracy = val_metrics['accuracy']
+        val_f1 = val_metrics['f1_weighted']
+        history['val_loss'].append(val_loss)
+        history['val_accuracy'].append(val_accuracy)
+        history['val_f1_weighted'].append(val_f1)
+
+        print(f"  Val Loss: {val_loss:.4f} | Val Acc: {val_accuracy:.4f} | Val F1 (W): {val_f1:.4f}")
+
+        # Scheduler Step (for ReduceLROnPlateau)
+        if scheduler and config.SCHEDULER_TYPE == 'reduce_on_plateau':
+            scheduler.step(val_loss)
+
+        # Check for best model
+        current_metric_value = val_metrics[metric_for_best]
+        is_better = False
+        if metric_for_best == 'loss':
+            is_better = current_metric_value < best_metric_value
+        else: # Higher is better for accuracy, f1
+            is_better = current_metric_value > best_metric_value
+
+        if is_better:
+            print(f"  ✨ Validation '{metric_for_best}' improved ({best_metric_value:.4f} --> {current_metric_value:.4f}). Saving model...")
+            best_metric_value = current_metric_value
+            try:
+                 # Ensure directory exists
+                 os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
+                 # Save model state dictionary
+                 torch.save(model.state_dict(), model_save_path)
+                 print(f"  Model saved to {model_save_path}")
+            except Exception as e:
+                 print(f"  Error saving model: {e}")
+        else:
+            print(f"  Validation '{metric_for_best}' did not improve from {best_metric_value:.4f}.")
+
+    print("\n--- Training Finished ---")
+    print(f"Best validation '{metric_for_best}': {best_metric_value:.4f}")
+    return history
+
+# --- Model Loading ---
+def load_trained_model(model_path, model_type, n_classes, vocab_size=None):
+    """Loads a pre-trained model state dict."""
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found at {model_path}")
+
+    model = initialize_model(model_type, n_classes, vocab_size)
+    try:
+        model.load_state_dict(torch.load(model_path, map_location=torch.device(config.DEVICE)))
+        print(f"Model weights loaded successfully from {model_path}")
+        model.eval() # Set to evaluation mode
+        return model
+    except Exception as e:
+        print(f"Error loading model state_dict from {model_path}: {e}")
+        print("Ensure the model architecture matches the saved weights and the file is not corrupted.")
+        raise
