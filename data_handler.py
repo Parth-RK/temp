@@ -255,39 +255,44 @@ def load_label_mappings(filepath=config.LABEL_MAP_PATH):
 
 # --- Dataset Loading and Preparation ---
 
-def load_raw_data(filepath=config.INPUT_FILE_PATH,
+def load_raw_data(filepath, # Now a mandatory argument
                   file_format=config.INPUT_FILE_FORMAT,
                   text_col_idx=config.TEXT_COLUMN_INDEX,
                   label_col_idx=config.LABEL_COLUMN_INDEX,
                   col_names=config.COLUMN_NAMES,
                   has_header=config.HAS_HEADER):
-    """Loads raw data from file into a pandas DataFrame."""
-    print(f"Loading raw data from: {filepath} (Format: {file_format})")
+    """Loads raw data from a specific file path."""
+    print(f"Attempting to load raw data from: {filepath} (Format: {file_format})")
+
+    # Check if file exists *before* trying to load
+    if not filepath or not os.path.exists(filepath):
+         print(f"Warning: Data file not found or path is invalid: {filepath}")
+         return None # Return None if file not found or path is None/empty
+
     try:
         if file_format == "csv":
             header = 0 if has_header else None
             names = None if has_header else col_names
-            df = pd.read_csv(filepath, header=header, names=names, on_bad_lines='warn')
+            df = pd.read_csv(filepath, header=header, names=names, on_bad_lines='warn', low_memory=False)
         elif file_format == "tsv":
             header = 0 if has_header else None
             names = None if has_header else col_names
-            df = pd.read_csv(filepath, sep='\t', header=header, names=names, on_bad_lines='warn')
+            df = pd.read_csv(filepath, sep='\t', header=header, names=names, on_bad_lines='warn', low_memory=False)
         elif file_format == "jsonl":
             df = pd.read_json(filepath, lines=True)
-             # Need to know column names for jsonl if they aren't standard
-            if not col_names:
-                 print("Warning: COLUMNS_NAMES in config might be needed for jsonl if keys vary.")
+            if not col_names and header is None:
+                 print("Warning: Column names/indices might be needed for jsonl.")
         else:
             raise ValueError(f"Unsupported file format: {file_format}")
 
         # Validate and select columns
         if label_col_idx >= len(df.columns) or text_col_idx >= len(df.columns):
-             raise IndexError(f"Column index out of bounds. File has {len(df.columns)} columns.")
+             raise IndexError(f"Column index out of bounds ({label_col_idx}, {text_col_idx}). File '{os.path.basename(filepath)}' has {len(df.columns)} columns: {list(df.columns)}")
 
         label_col_name = df.columns[label_col_idx]
         text_col_name = df.columns[text_col_idx]
 
-        print(f"Identified columns - Label: '{label_col_name}' (Index {label_col_idx}), Text: '{text_col_name}' (Index {text_col_idx})")
+        print(f"  Using columns - Label: '{label_col_name}' (Index {label_col_idx}), Text: '{text_col_name}' (Index {text_col_idx})")
 
         # Create DataFrame with standard names 'label' and 'text'
         df_std = pd.DataFrame({
@@ -295,20 +300,27 @@ def load_raw_data(filepath=config.INPUT_FILE_PATH,
             'text': df[text_col_name]
         })
 
-        print(f"Loaded {len(df_std)} rows.")
-        return df_std.dropna().reset_index(drop=True) # Drop rows with NaN in selected cols
+        # Drop rows with NaN in selected cols *after* selection
+        original_rows = len(df_std)
+        df_std = df_std.dropna().reset_index(drop=True)
+        rows_dropped = original_rows - len(df_std)
+        if rows_dropped > 0:
+            print(f"  Dropped {rows_dropped} rows with NaN values in selected columns.")
+
+        print(f"  Successfully loaded {len(df_std)} rows from {os.path.basename(filepath)}.")
+        return df_std
 
     except FileNotFoundError:
-        print(f"Error: Data file not found at {filepath}")
-        raise # Re-raise critical error
+        print(f"Error: Data file somehow not found at {filepath} despite existence check.")
+        return None
     except IndexError as e:
-         print(f"Error: Problem accessing columns by index. Check config settings (COLUMN_INDEX, HAS_HEADER). Details: {e}")
-         raise
+         print(f"Error: Problem accessing columns by index in {filepath}. Check config settings. Details: {e}")
+         return None
     except Exception as e:
-        print(f"An unexpected error occurred during data loading: {e}")
+        print(f"An unexpected error occurred loading {filepath}: {e}")
         import traceback
         traceback.print_exc()
-        raise
+        return None
 
 def prepare_data(df_train, df_val, df_test):
     """
@@ -521,31 +533,68 @@ def get_data_pipeline(force_rebuild_vocab=False):
     print("--- Starting Data Pipeline ---")
 
     # 1. Load Raw Data
-    df = load_raw_data()
+    print("\n--- Loading Data ---")
+    df_train = load_raw_data(filepath=config.TRAIN_FILE_PATH)
+    if df_train is None or df_train.empty:
+        raise FileNotFoundError(f"CRITICAL: Training data failed to load from {config.TRAIN_FILE_PATH}. Cannot proceed.")
 
-    # 2. Split Data
-    print("\nSplitting data...")
-    df_train, df_temp = train_test_split(
-        df,
-        test_size=(config.VALIDATION_SPLIT_SIZE + config.TEST_SPLIT_SIZE),
-        random_state=config.SEED,
-        stratify=df['label'] if config.STRATIFY_SPLIT else None
-    )
-    relative_test_size = config.TEST_SPLIT_SIZE / (config.VALIDATION_SPLIT_SIZE + config.TEST_SPLIT_SIZE)
-    df_val, df_test = train_test_split(
-        df_temp,
-        test_size=relative_test_size,
-        random_state=config.SEED,
-        stratify=df_temp['label'] if config.STRATIFY_SPLIT else None
-    )
-    print(f"Split sizes: Train={len(df_train)}, Val={len(df_val)}, Test={len(df_test)}")
+    df_val = load_raw_data(filepath=config.VALID_FILE_PATH)
+    df_test = load_raw_data(filepath=config.TEST_FILE_PATH)
 
-    # 3. Handle Labels
+    train_needs_split = df_val is None or df_test is None
+    if train_needs_split:
+        print("\n--- Splitting Training Data ---")
+        df_remaining_for_train = df_train.copy()
+
+        if df_val is None:
+            print("Validation data not loaded or unavailable. Splitting from train.")
+            if len(df_remaining_for_train) < 2:
+                print("Warning: Not enough training data to create a validation split.")
+                df_val = pd.DataFrame(columns=['label', 'text'])
+            else:
+                print(f"Splitting validation set ({config.VALIDATION_SPLIT_SIZE*100:.1f}%)...")
+                stratify_col_val = df_remaining_for_train['label'] if config.STRATIFY_SPLIT else None
+                df_remaining_for_train, df_val = train_test_split(
+                    df_remaining_for_train,
+                    test_size=config.VALIDATION_SPLIT_SIZE,
+                    random_state=config.SEED,
+                    stratify=stratify_col_val
+                )
+                print(f"New Train size: {len(df_remaining_for_train)}, Val size: {len(df_val)}")
+
+        if df_test is None:
+             print("Test data not loaded or unavailable. Splitting from remaining train.")
+             if len(df_remaining_for_train) < 2:
+                 print("Warning: Not enough remaining training data to create a test split.")
+                 df_test = pd.DataFrame(columns=['label', 'text'])
+             else:
+                current_train_fraction = 1.0 - (config.VALIDATION_SPLIT_SIZE if df_val is not None and len(df_val)>0 else 0)
+                if current_train_fraction <= 0: current_train_fraction = 1.0
+                effective_split_size = config.TEST_SPLIT_SIZE / current_train_fraction
+                effective_split_size = min(max(0.0, effective_split_size), 1.0 - (1/len(df_remaining_for_train)) )
+                if effective_split_size <= 0:
+                     print("Warning: Calculated test split size is too small. Test set will be empty.")
+                     df_test = pd.DataFrame(columns=['label', 'text'])
+                else:
+                     print(f"Splitting test set ({effective_split_size*100:.1f}% from remaining train)...")
+                     stratify_col_test = df_remaining_for_train['label'] if config.STRATIFY_SPLIT else None
+                     df_remaining_for_train, df_test = train_test_split(
+                         df_remaining_for_train,
+                         test_size=effective_split_size,
+                         random_state=config.SEED,
+                         stratify=stratify_col_test
+                     )
+                     print(f"Final Train size: {len(df_remaining_for_train)}, Test size: {len(df_test)}")
+
+        df_train = df_remaining_for_train
+        print("--- Data Splitting Finished ---")
+
+    # 2. Handle Labels
     df_train, df_val, df_test, label_to_int, int_to_label, n_classes = prepare_data(
         df_train.copy(), df_val.copy(), df_test.copy() # Use copies to avoid SettingWithCopyWarning
     )
 
-    # 4. Initialize Preprocessor and Tokenizer/Vocabulary
+    # 3. Initialize Preprocessor and Tokenizer/Vocabulary
     print(f"\nInitializing preprocessor: {config.PREPROCESSOR_TYPE}")
     if config.PREPROCESSOR_TYPE == 'spacy':
         preprocessor = SpacyTextPreprocessor()
@@ -587,7 +636,7 @@ def get_data_pipeline(force_rebuild_vocab=False):
         print(f"Vocabulary size: {vocab_size}")
 
 
-    # 5. Preprocess Text Data (apply cleaning)
+    # 4. Preprocess Text Data (apply cleaning)
     print("\nApplying text preprocessing to all datasets...")
     # Preprocessor preprocess_batch should ideally return strings for transformers, lists of tokens for others
     # For simplicity here, let's assume preprocess_batch returns cleaned strings,
@@ -598,7 +647,7 @@ def get_data_pipeline(force_rebuild_vocab=False):
     test_texts = preprocessor.preprocess_batch(df_test['text'].tolist())
     print("Text preprocessing complete.")
 
-    # 6. Create Datasets
+    # 5. Create Datasets
     print("\nCreating PyTorch Datasets...")
     train_dataset = GenericDataset(
         texts=train_texts,
@@ -625,7 +674,7 @@ def get_data_pipeline(force_rebuild_vocab=False):
         model_type=config.MODEL_TYPE
     )
 
-    # 7. Create DataLoaders
+    # 6. Create DataLoaders
     train_loader, val_loader, test_loader = create_dataloaders(
         train_dataset, val_dataset, test_dataset,
         model_type=config.MODEL_TYPE,

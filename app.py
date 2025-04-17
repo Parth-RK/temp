@@ -5,6 +5,7 @@ import json
 import argparse
 import sys
 from operator import itemgetter
+import glob
 
 # Dynamically add project root to path if needed
 # PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -161,6 +162,37 @@ def load_prediction_artifacts(run_dir):
     return model, vocab_or_tokenizer, preprocessor, int_to_label, run_cfg
 
 
+def find_latest_run_dir(model_type):
+    """Finds the directory of the latest run for a given model type."""
+    base_model_dir = os.path.join(config.ARTIFACTS_DIR, model_type)
+    if not os.path.isdir(base_model_dir):
+        print(f"Error: Artifact directory for model type '{model_type}' not found at {base_model_dir}")
+        return None
+
+    existing_runs = glob.glob(os.path.join(base_model_dir, "[0-9][0-9][0-9]*"))
+    if not existing_runs:
+        print(f"Error: No completed runs found for model type '{model_type}'.")
+        return None
+
+    latest_run_num = -1
+    latest_run_path = None
+    for run_path in existing_runs:
+        try:
+            run_num = int(os.path.basename(run_path))
+            if run_num > latest_run_num:
+                latest_run_num = run_num
+                latest_run_path = run_path
+        except ValueError:
+            continue # Skip non-numeric dirs
+
+    if latest_run_path:
+        print(f"Found latest run for '{model_type}': {os.path.basename(latest_run_path)}")
+        return latest_run_path
+    else:
+        print(f"Error: Could not determine the latest run for model type '{model_type}'.")
+        return None
+
+
 # --- Predictor Class ---
 
 class EmotionPredictor:
@@ -276,30 +308,29 @@ def run_interactive_app(predictor):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive Emotion Prediction App")
+    parser = argparse.ArgumentParser(description="Interactive Emotion Prediction App (Loads Latest Run)")
     parser.add_argument(
-        "--run_dir",
+        "--model_type",
         type=str,
         required=True,
-        help="Path to the specific run artifact directory (e.g., artifacts/run_xxxxxxxx)"
+        choices=['Transformer', 'CNN_RNN_Attention', 'LSTM'],
+        help="Specify the type of model whose latest run should be loaded."
     )
     args = parser.parse_args()
 
-    if not os.path.isdir(args.run_dir):
-        print(f"Error: Run directory not found at {args.run_dir}")
+    latest_run_dir = find_latest_run_dir(args.model_type)
+
+    if not latest_run_dir:
+        print("Exiting.")
         sys.exit(1)
 
-    # Load artifacts based on the specified run directory
-    model, vocab_or_tokenizer, preprocessor, int_to_label, run_cfg = load_prediction_artifacts(args.run_dir)
+    model, vocab_or_tokenizer, preprocessor, int_to_label, run_cfg = load_prediction_artifacts(latest_run_dir)
 
     if model is None:
-        print("Failed to load necessary artifacts. Exiting.")
+        print("Failed to load necessary artifacts from the latest run. Exiting.")
         sys.exit(1)
 
-    # Create predictor instance
     predictor = EmotionPredictor(model, vocab_or_tokenizer, preprocessor, int_to_label, run_cfg)
-
-    # Start interactive loop
     run_interactive_app(predictor)
 
 
