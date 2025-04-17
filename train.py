@@ -31,13 +31,26 @@ def run_training_pipeline():
     start_time = time.time()
     set_seed()
 
-    print(f"=== Starting Training Run: {config.RUN_ID} ===")
+    # Use config.RUN_NAME for logging
+    print(f"=== Starting Training Run: {config.RUN_NAME} ===")
+    print(f"=== Model Type: {config.MODEL_TYPE} ===")
+    print(f"=== Artifacts Dir: {config.RUN_ARTIFACTS_DIR} ===")
 
     # --- 1. Data Pipeline ---
     try:
         train_loader, val_loader, test_loader, label_to_int, int_to_label, n_classes, vocab_or_tokenizer, vocab_size = data_handler.get_data_pipeline()
+        # Add checks for empty loaders if splitting failed
+        if not train_loader:
+            print("CRITICAL: Training data loader is empty. Check data source and splitting.")
+            sys.exit(1)
+        if not val_loader:
+            print("WARNING: Validation data loader is empty. Validation steps will be skipped.")
+        if not test_loader:
+            print("WARNING: Test data loader is empty. Final evaluation will be skipped.")
     except Exception as e:
         print(f"Error during data pipeline: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
     # --- 2. Initialize Model ---
@@ -49,7 +62,6 @@ def run_training_pipeline():
 
     # --- 3. Initialize Optimizer & Scheduler ---
     try:
-        # Calculate total training steps for scheduler if needed
         num_train_steps = len(train_loader) * config.EPOCHS if config.SCHEDULER_TYPE == 'linear_warmup' else None
         optimizer, scheduler = engine.initialize_optimizer_scheduler(
             model, config.OPTIMIZER_TYPE, config.SCHEDULER_TYPE, num_train_steps
@@ -59,18 +71,26 @@ def run_training_pipeline():
         sys.exit(1)
 
     # --- 4. Train Model ---
+    history = None # Initialize history
     try:
-        history = engine.train_model(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            device=config.DEVICE,
-            epochs=config.EPOCHS,
-            model_save_path=config.BEST_MODEL_PATH,
-            metric_for_best=config.METRIC_FOR_BEST_MODEL
-        )
+        # Only proceed if validation loader exists
+        if val_loader and len(val_loader) > 0:
+            history = engine.train_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                device=config.DEVICE,
+                epochs=config.EPOCHS,
+                model_save_path=config.BEST_MODEL_PATH,
+                metric_for_best=config.METRIC_FOR_BEST_MODEL
+            )
+        else:
+            print("Skipping training loop as validation loader is empty.")
+            # Optionally: Still save the initial model?
+            # torch.save(model.state_dict(), config.BEST_MODEL_PATH)
+            # print("Initial model saved (no training performed).")
     except Exception as e:
         print(f"Error during model training: {e}")
         import traceback
@@ -78,18 +98,19 @@ def run_training_pipeline():
         sys.exit(1)
 
     # --- 5. Plot Training History ---
-    if config.PLOT_TRAINING_HISTORY:
+    if config.PLOT_TRAINING_HISTORY and history:
         try:
             print("\nGenerating training history plots...")
             plotter.plot_training_history(history, save_path=config.TRAINING_PLOTS_PATH)
         except Exception as e:
             print(f"Warning: Could not generate training plots. Error: {e}")
+    elif config.PLOT_TRAINING_HISTORY:
+        print("Skipping training history plot as training did not run (no validation data).")
 
     # --- 6. Evaluate on Test Set ---
-    if config.GENERATE_TEST_REPORT or config.GENERATE_CONFUSION_MATRIX:
+    if (config.GENERATE_TEST_REPORT or config.GENERATE_CONFUSION_MATRIX) and test_loader and len(test_loader) > 0:
         print("\n--- Evaluating on Test Set ---")
         try:
-            # Load the *best* saved model for final evaluation
             print(f"Loading best model from: {config.BEST_MODEL_PATH}")
             best_model = engine.load_trained_model(
                 model_path=config.BEST_MODEL_PATH,
@@ -107,7 +128,6 @@ def run_training_pipeline():
             print(f"  Precision (Weighted): {test_metrics['precision_weighted']:.4f}")
             print(f"  Recall (Weighted): {test_metrics['recall_weighted']:.4f}")
 
-            # Generate detailed report and confusion matrix
             plotter.generate_classification_analysis(
                 true_labels=test_metrics['true_labels'],
                 predictions=test_metrics['predictions'],
@@ -116,13 +136,14 @@ def run_training_pipeline():
                 cm_path=config.CONFUSION_MATRIX_PATH if config.GENERATE_CONFUSION_MATRIX else None,
                 prefix="Test Set"
             )
-
         except FileNotFoundError:
             print(f"Warning: Best model file not found at {config.BEST_MODEL_PATH}. Skipping test evaluation.")
         except Exception as e:
             print(f"Error during test evaluation: {e}")
             import traceback
             traceback.print_exc()
+    elif (config.GENERATE_TEST_REPORT or config.GENERATE_CONFUSION_MATRIX):
+        print("Skipping test evaluation as test loader is empty.")
 
     # --- 7. Save Final Run Configuration ---
     try:
@@ -130,10 +151,9 @@ def run_training_pipeline():
     except Exception as e:
         print(f"Warning: Failed to save final run config. Error: {e}")
 
-
     end_time = time.time()
     total_time = end_time - start_time
-    print(f"\n=== Training Run {config.RUN_ID} Finished ===")
+    print(f"\n=== Training Run {config.RUN_NAME} Finished ===")
     print(f"Total Time: {total_time / 60:.2f} minutes")
     print(f"Artifacts saved in: {config.RUN_ARTIFACTS_DIR}")
     print("========================================")

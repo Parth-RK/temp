@@ -55,7 +55,8 @@ def get_next_run_dir(base_artifacts_dir, model_type):
         max_run_num = 0
         for run_path in existing_runs:
             try:
-                run_num = int(os.path.basename(run_path))
+                # Use Path object for reliable basename extraction
+                run_num = int(Path(run_path).name)
                 if run_num > max_run_num:
                     max_run_num = run_num
             except ValueError:
@@ -67,6 +68,8 @@ def get_next_run_dir(base_artifacts_dir, model_type):
 
 # *** Define Run directory dynamically ***
 RUN_ARTIFACTS_DIR = get_next_run_dir(ARTIFACTS_DIR, MODEL_TYPE)
+# Add RUN_NAME derived from the directory
+RUN_NAME = os.path.basename(RUN_ARTIFACTS_DIR) # e.g., "001", "002"
 MODEL_SAVE_DIR = os.path.join(RUN_ARTIFACTS_DIR, "model")
 BEST_MODEL_FILENAME = "best_model.pt"
 BEST_MODEL_PATH = os.path.join(MODEL_SAVE_DIR, BEST_MODEL_FILENAME)
@@ -164,6 +167,8 @@ def save_run_config(filepath=RUN_CONFIG_PATH):
 
 print(f"--- Configuration Loaded ---")
 print(f"Model Type: {MODEL_TYPE}")
+# Use RUN_NAME for logging
+print(f"Run Name / Directory: {RUN_NAME} (in {os.path.dirname(RUN_ARTIFACTS_DIR)})")
 print(f"Device: {DEVICE}")
 print(f"Run Artifacts Directory: {RUN_ARTIFACTS_DIR}")
 print(f"Training Data: {TRAIN_FILE_PATH}")
