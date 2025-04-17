@@ -11,8 +11,11 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # --- Model Selection ---
 # Options: 'Transformer', 'CNN_RNN_Attention', 'LSTM'
+# This determines which configuration settings are primarily used
+# and where artifacts for THIS run will be saved.
 MODEL_TYPE = 'Transformer'
 # MODEL_TYPE = 'LSTM'
+# MODEL_TYPE = 'CNN_RNN_Attention'
 
 # --- Data Configuration ---
 DATA_DIR = "."
@@ -44,71 +47,59 @@ STRATIFY_SPLIT = True # Stratify splits based on labels if splitting from train
 
 # --- Artifacts & Output ---
 ARTIFACTS_DIR = "artifacts"
-# *** Function to get the next run directory ***
-def get_next_run_dir(base_artifacts_dir, model_type):
-    model_dir = os.path.join(base_artifacts_dir, model_type)
-    os.makedirs(model_dir, exist_ok=True)
-    existing_runs = glob.glob(os.path.join(model_dir, "[0-9][0-9][0-9]*")) # Find numeric dirs
-    if not existing_runs:
-        next_run_num = 1
-    else:
-        max_run_num = 0
-        for run_path in existing_runs:
-            try:
-                # Use Path object for reliable basename extraction
-                run_num = int(Path(run_path).name)
-                if run_num > max_run_num:
-                    max_run_num = run_num
-            except ValueError:
-                continue # Ignore non-numeric directory names
-        next_run_num = max_run_num + 1
-    # Format with leading zeros (e.g., 001)
-    run_dir_name = f"{next_run_num:03d}"
-    return os.path.join(model_dir, run_dir_name)
 
-# *** Define Run directory dynamically ***
-RUN_ARTIFACTS_DIR = get_next_run_dir(ARTIFACTS_DIR, MODEL_TYPE)
-# Add RUN_NAME derived from the directory
-RUN_NAME = os.path.basename(RUN_ARTIFACTS_DIR) # e.g., "001", "002"
-MODEL_SAVE_DIR = os.path.join(RUN_ARTIFACTS_DIR, "model")
+# *** Define Fixed Artifact Directory based on MODEL_TYPE ***
+# No more numbered runs, artifacts saved directly into the model type folder
+MODEL_TYPE_ARTIFACTS_DIR = os.path.join(ARTIFACTS_DIR, MODEL_TYPE)
+
+# Define paths relative to the fixed model type directory
+MODEL_SAVE_DIR = os.path.join(MODEL_TYPE_ARTIFACTS_DIR, "model") # Keep model in subfolder
 BEST_MODEL_FILENAME = "best_model.pt"
 BEST_MODEL_PATH = os.path.join(MODEL_SAVE_DIR, BEST_MODEL_FILENAME)
-# Global label map path (outside run-specific dirs)
+
+# Global label map path (outside model-specific dirs)
 LABEL_MAP_FILENAME = "label_map.json"
 LABEL_MAP_PATH = os.path.join(ARTIFACTS_DIR, LABEL_MAP_FILENAME)
-# Run-specific vocab path
-VOCAB_FILENAME = "vocab.json" # Only used for non-transformer models
-VOCAB_PATH = os.path.join(RUN_ARTIFACTS_DIR, VOCAB_FILENAME)
-# Run-specific output files
-TRAINING_PLOTS_FILENAME = "training_plots.png"
-TRAINING_PLOTS_PATH = os.path.join(RUN_ARTIFACTS_DIR, TRAINING_PLOTS_FILENAME)
-TEST_REPORT_FILENAME = "test_report.txt"
-TEST_REPORT_PATH = os.path.join(RUN_ARTIFACTS_DIR, TEST_REPORT_FILENAME)
-CONFUSION_MATRIX_FILENAME = "test_confusion_matrix.png"
-CONFUSION_MATRIX_PATH = os.path.join(RUN_ARTIFACTS_DIR, CONFUSION_MATRIX_FILENAME)
-RUN_CONFIG_FILENAME = "run_config.json"
-RUN_CONFIG_PATH = os.path.join(RUN_ARTIFACTS_DIR, RUN_CONFIG_FILENAME) # Save config for this run
 
-# Ensure artifact directories for the current run exist
-os.makedirs(RUN_ARTIFACTS_DIR, exist_ok=True)
+# Model-specific vocab path (inside model type dir)
+VOCAB_FILENAME = "vocab.json" # Only used for non-transformer models
+VOCAB_PATH = os.path.join(MODEL_TYPE_ARTIFACTS_DIR, VOCAB_FILENAME)
+
+# Model-specific output files (inside model type dir)
+TRAINING_PLOTS_FILENAME = "training_plots.png"
+TRAINING_PLOTS_PATH = os.path.join(MODEL_TYPE_ARTIFACTS_DIR, TRAINING_PLOTS_FILENAME)
+TEST_REPORT_FILENAME = "test_report.txt"
+TEST_REPORT_PATH = os.path.join(MODEL_TYPE_ARTIFACTS_DIR, TEST_REPORT_FILENAME)
+CONFUSION_MATRIX_FILENAME = "test_confusion_matrix.png"
+CONFUSION_MATRIX_PATH = os.path.join(MODEL_TYPE_ARTIFACTS_DIR, CONFUSION_MATRIX_FILENAME)
+RUN_CONFIG_FILENAME = "run_config.json"
+# Path for saving the config of the *current* run
+RUN_CONFIG_PATH = os.path.join(MODEL_TYPE_ARTIFACTS_DIR, RUN_CONFIG_FILENAME)
+
+# Ensure artifact directories for the current model type exist
+os.makedirs(MODEL_TYPE_ARTIFACTS_DIR, exist_ok=True)
 os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+# Ensure base artifacts dir exists (for global label map)
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 
 # --- Preprocessing ---
+# Adjust preprocessor based on model type (common pattern)
 PREPROCESSOR_TYPE = 'basic' if MODEL_TYPE == 'Transformer' else 'spacy'
-SPACY_MODEL_NAME = "en_core_web_md"
-REMOVE_STOPWORDS = False
+SPACY_MODEL_NAME = "en_core_web_sm" # Smaller default model
+REMOVE_STOPWORDS = False if MODEL_TYPE == 'Transformer' else False # Keep stopwords for transformers? Often yes.
 
 # --- Transformer Model Specific ---
-TRANSFORMER_MODEL_NAME = "distilbert-base-uncased"
+TRANSFORMER_MODEL_NAME = "distilbert-base-uncased" # Example
 
 # --- RNN/CNN Model Specific ---
-EMBEDDING_DIM = 300
-VOCAB_MIN_FREQ = 2
-CNN_OUT_CHANNELS = 100
+EMBEDDING_DIM = 100 # Smaller default
+VOCAB_MIN_FREQ = 3
+CNN_OUT_CHANNELS = 64
 CNN_KERNEL_SIZES = [3, 4, 5]
 RNN_TYPE = 'lstm'
-RNN_HIDDEN_DIM = 256
-RNN_LAYERS = 2
+RNN_HIDDEN_DIM = 128
+RNN_LAYERS = 1 # Simpler default
+DROPOUT_PROB = 0.3 # Explicit dropout probability
 PAD_TOKEN = "<pad>"
 UNK_TOKEN = "<unk>"
 SOS_TOKEN = "<sos>"
@@ -119,42 +110,47 @@ SOS_IDX = 2
 EOS_IDX = 3
 
 # --- Training Configuration ---
-MAX_LEN = 128
-TRAIN_BATCH_SIZE = 16 if MODEL_TYPE == 'Transformer' else 64
-VALID_BATCH_SIZE = 32 if MODEL_TYPE == 'Transformer' else 128
-EPOCHS = 5 if MODEL_TYPE == 'Transformer' else 10
-LEARNING_RATE = 3e-5 if MODEL_TYPE == 'Transformer' else 1e-3
-WEIGHT_DECAY = 0.01 if MODEL_TYPE == 'Transformer' else 1e-5
-OPTIMIZER_TYPE = 'AdamW'
+MAX_LEN = 128 # Keep consistent for now
+TRAIN_BATCH_SIZE = 32 if MODEL_TYPE == 'Transformer' else 64
+VALID_BATCH_SIZE = 64 if MODEL_TYPE == 'Transformer' else 128
+EPOCHS = 4 if MODEL_TYPE == 'Transformer' else 8
+LEARNING_RATE = 2e-5 if MODEL_TYPE == 'Transformer' else 1e-3
+WEIGHT_DECAY = 0.01 # Often used with AdamW for regularization
+OPTIMIZER_TYPE = 'AdamW' # Good default, works for all types
 SCHEDULER_TYPE = 'linear_warmup' if MODEL_TYPE == 'Transformer' else 'reduce_on_plateau'
-WARMUP_PROPORTION = 0.1
-GRADIENT_CLIP_VALUE = 1.0
+WARMUP_PROPORTION = 0.1 # Only relevant for linear_warmup
+GRADIENT_CLIP_VALUE = 1.0 # Often useful for RNNs and Transformers
 
 # --- Evaluation & Plotting ---
 PLOT_TRAINING_HISTORY = True
 GENERATE_TEST_REPORT = True
 GENERATE_CONFUSION_MATRIX = True
-METRIC_FOR_BEST_MODEL = 'accuracy'
+METRIC_FOR_BEST_MODEL = 'accuracy' # or 'f1_weighted' or 'loss'
 
 # --- Logging & Config Saving ---
-# (Keep the save_run_config function as before, just ensure it uses RUN_CONFIG_PATH)
 def save_run_config(filepath=RUN_CONFIG_PATH):
     """Saves the current configuration values to a JSON file for the run."""
     import json
     import inspect
     config_vars = {}
     # Filter variables (same logic as before)
-    for name, obj in inspect.getmembers(__import__(__name__)):
-        if not name.startswith("__") and not inspect.ismodule(obj) and \
+    current_module = __import__(__name__)
+    for name, obj in inspect.getmembers(current_module):
+        # Include only 'global' variables (typically uppercase)
+        # and check if serializable
+        if name.isupper() and not name.startswith("__") and not inspect.ismodule(obj) and \
            not inspect.isfunction(obj) and not inspect.isclass(obj) and \
            isinstance(obj, (str, int, float, bool, list, tuple, dict, type(None))):
-            # Handle non-serializable types like paths if needed, or just store strings
-            if isinstance(obj, (list, tuple)):
-                 config_vars[name] = [str(i) if isinstance(i, type(Path(TRAIN_FILE_PATH))) else i for i in obj]
-            elif isinstance(obj, type(Path(TRAIN_FILE_PATH))): # Requires 'from pathlib import Path'
-                 config_vars[name] = str(obj)
+
+            # Convert Path objects to string for serialization
+            if isinstance(obj, Path):
+                config_vars[name] = str(obj)
+            elif isinstance(obj, (list, tuple)):
+                 # Convert Path objects within lists/tuples
+                 config_vars[name] = [str(i) if isinstance(i, Path) else i for i in obj]
             else:
                  config_vars[name] = obj
+
     try:
         # Ensure the directory exists one last time before writing
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -164,14 +160,18 @@ def save_run_config(filepath=RUN_CONFIG_PATH):
     except Exception as e:
         print(f"Warning: Could not save run configuration to {filepath}. Error: {e}")
 
-
+# --- Print Summary ---
 print(f"--- Configuration Loaded ---")
-print(f"Model Type: {MODEL_TYPE}")
-# Use RUN_NAME for logging
-print(f"Run Name / Directory: {RUN_NAME} (in {os.path.dirname(RUN_ARTIFACTS_DIR)})")
+print(f"Selected Model Type: {MODEL_TYPE}")
+print(f"Artifacts Directory for this type: {MODEL_TYPE_ARTIFACTS_DIR}")
 print(f"Device: {DEVICE}")
-print(f"Run Artifacts Directory: {RUN_ARTIFACTS_DIR}")
 print(f"Training Data: {TRAIN_FILE_PATH}")
 print(f"Validation Data: {'Provided (' + str(VALID_FILE_PATH) + ')' if VALID_FILE_PATH else 'Splitting from Train'}")
 print(f"Test Data: {'Provided (' + str(TEST_FILE_PATH) + ')' if TEST_FILE_PATH else 'Splitting from Train'}")
+print(f"Preprocessor: {PREPROCESSOR_TYPE}")
+if MODEL_TYPE == 'Transformer':
+    print(f"Transformer Model: {TRANSFORMER_MODEL_NAME}")
+else:
+    print(f"Vocab Path: {VOCAB_PATH}")
+    print(f"Embedding Dim: {EMBEDDING_DIM}, RNN Type: {RNN_TYPE}, Hidden Dim: {RNN_HIDDEN_DIM}")
 print("---------------------------")

@@ -7,11 +7,6 @@ import sys
 from operator import itemgetter
 import glob
 
-# Dynamically add project root to path if needed
-# PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-# if PROJECT_ROOT not in sys.path:
-#     sys.path.append(PROJECT_ROOT)
-
 # Import necessary modules after potentially modifying path
 try:
     import config # To get default paths and potentially model type if config not saved in run
@@ -27,21 +22,24 @@ except Exception as e:
 
 # --- Helper Functions ---
 
-def load_run_config(run_dir):
-    """Loads the specific configuration saved for a given run."""
-    config_path = os.path.join(run_dir, config.RUN_CONFIG_FILENAME) # Use default filename
+def load_run_config(model_type_dir):
+    """Loads the specific configuration saved for the given model type run."""
+    config_path = os.path.join(model_type_dir, config.RUN_CONFIG_FILENAME) # Use default filename
     if not os.path.exists(config_path):
         print(f"Warning: Run configuration file not found at {config_path}. Using global config.py defaults.")
         # Fallback logic: Use global config values directly.
         # This might be inaccurate if global config changed since the run.
         class RunConfig:
-             MODEL_TYPE = config.MODEL_TYPE
+             MODEL_TYPE = config.MODEL_TYPE # Note: This might not match the requested model_type_dir's type
              MAX_LEN = config.MAX_LEN
              PREPROCESSOR_TYPE = config.PREPROCESSOR_TYPE
              TRANSFORMER_MODEL_NAME = getattr(config, 'TRANSFORMER_MODEL_NAME', None) # Use getattr for safety
-             VOCAB_PATH = os.path.join(run_dir, config.VOCAB_FILENAME) # Construct potential path
+             # Construct potential path relative to the model_type_dir
+             VOCAB_PATH = os.path.join(model_type_dir, config.VOCAB_FILENAME)
              REMOVE_STOPWORDS = getattr(config, 'REMOVE_STOPWORDS', False)
              SPACY_MODEL_NAME = getattr(config, 'SPACY_MODEL_NAME', 'en_core_web_sm')
+        # Override MODEL_TYPE based on the directory we are trying to load
+        RunConfig.MODEL_TYPE = os.path.basename(model_type_dir)
         return RunConfig()
 
     try:
@@ -51,30 +49,38 @@ def load_run_config(run_dir):
         class RunConfig:
             def __init__(self, **entries):
                 self.__dict__.update(entries)
-                # Ensure necessary paths are relative to the loaded run_dir if applicable
-                self.VOCAB_PATH = os.path.join(run_dir, config.VOCAB_FILENAME)
+                # Ensure necessary paths are relative to the loaded model_type_dir
+                self.VOCAB_PATH = os.path.join(model_type_dir, config.VOCAB_FILENAME)
 
         print(f"Loaded run configuration from {config_path}")
+        # Ensure the loaded config's model type matches the directory (sanity check)
+        if loaded_config.get('MODEL_TYPE') != os.path.basename(model_type_dir):
+             print(f"Warning: Loaded config MODEL_TYPE ({loaded_config.get('MODEL_TYPE')}) does not match directory ({os.path.basename(model_type_dir)})")
         return RunConfig(**loaded_config)
     except Exception as e:
         print(f"Error loading run config from {config_path}: {e}. Using global defaults.")
         # Fallback to global config if loading fails
         class RunConfig: # Duplicated fallback logic
-             MODEL_TYPE = config.MODEL_TYPE
+             MODEL_TYPE = config.MODEL_TYPE # Again, might not match requested type
              MAX_LEN = config.MAX_LEN
              PREPROCESSOR_TYPE = config.PREPROCESSOR_TYPE
              TRANSFORMER_MODEL_NAME = getattr(config, 'TRANSFORMER_MODEL_NAME', None)
-             VOCAB_PATH = os.path.join(run_dir, config.VOCAB_FILENAME)
+             VOCAB_PATH = os.path.join(model_type_dir, config.VOCAB_FILENAME)
              REMOVE_STOPWORDS = getattr(config, 'REMOVE_STOPWORDS', False)
              SPACY_MODEL_NAME = getattr(config, 'SPACY_MODEL_NAME', 'en_core_web_sm')
+        RunConfig.MODEL_TYPE = os.path.basename(model_type_dir) # Override with dir name
         return RunConfig()
 
-def load_prediction_artifacts(run_dir):
-    """Loads all necessary artifacts for prediction based on the run's config."""
-    print(f"\nLoading artifacts from run directory: {run_dir}")
-    run_cfg = load_run_config(run_dir)
+def load_prediction_artifacts(model_type_dir):
+    """Loads all necessary artifacts for prediction based on the model type's directory."""
+    print(f"\nLoading artifacts from model type directory: {model_type_dir}")
+    if not os.path.isdir(model_type_dir):
+        print(f"Error: Artifact directory not found at {model_type_dir}")
+        return None, None, None, None, None
 
-    # Load Label Map (global or user-provided)
+    run_cfg = load_run_config(model_type_dir)
+
+    # Load Label Map (global)
     label_to_int, int_to_label = data_handler.load_label_mappings(config.LABEL_MAP_PATH)
     if not int_to_label:
         print("Warning: Label map not found or empty. Predictions will show integer labels.")
@@ -86,20 +92,22 @@ def load_prediction_artifacts(run_dir):
         print("Warning: Cannot determine number of classes from label map.")
         # Might need to infer from model later if possible, or fail
 
-    # Load Model
-    model_path = os.path.join(run_dir, "model", config.BEST_MODEL_FILENAME)
+    # Determine paths within the model_type_dir
+    model_path = os.path.join(model_type_dir, "model", config.BEST_MODEL_FILENAME)
+    vocab_path = run_cfg.VOCAB_PATH # Use path from loaded config (points to model_type_dir)
+
     vocab_size = None
     vocab_or_tokenizer = None
 
     if run_cfg.MODEL_TYPE != 'Transformer':
         # Load Vocabulary for non-transformer models
         try:
-            vocab = data_handler.Vocabulary.load(run_cfg.VOCAB_PATH)
+            vocab = data_handler.Vocabulary.load(vocab_path)
             vocab_size = len(vocab)
             vocab_or_tokenizer = vocab
             print(f"Vocabulary loaded (Size: {vocab_size}).")
         except FileNotFoundError:
-            print(f"Error: Vocabulary file not found at {run_cfg.VOCAB_PATH}. Cannot proceed for {run_cfg.MODEL_TYPE} model.")
+            print(f"Error: Vocabulary file not found at {vocab_path}. Cannot proceed for {run_cfg.MODEL_TYPE} model.")
             return None, None, None, None, None
         except Exception as e:
             print(f"Error loading vocabulary: {e}")
@@ -111,7 +119,12 @@ def load_prediction_artifacts(run_dir):
               return None, None, None, None, None
          try:
               print(f"Loading tokenizer: {run_cfg.TRANSFORMER_MODEL_NAME}")
-              tokenizer = data_handler.AutoTokenizer.from_pretrained(run_cfg.TRANSFORMER_MODEL_NAME)
+              # Check if tokenizer files exist within the model_type_dir (optional optimization)
+              # If not, from_pretrained will download. If they exist, it should load locally.
+              tokenizer = data_handler.AutoTokenizer.from_pretrained(
+                  run_cfg.TRANSFORMER_MODEL_NAME,
+                  # local_files_only=True # Uncomment to force local loading if desired
+              )
               vocab_or_tokenizer = tokenizer
               vocab_size = tokenizer.vocab_size # Use tokenizer's vocab size info
          except Exception as e:
@@ -155,43 +168,16 @@ def load_prediction_artifacts(run_dir):
          except ImportError as e:
               print(f"Error initializing Spacy Preprocessor: {e}")
               return None, None, None, None, None
+         except Exception as e: # Catch other Spacy errors (e.g., model download)
+              print(f"Error initializing Spacy Preprocessor: {e}")
+              return None, None, None, None, None
     else:
         preprocessor = data_handler.BasicTextCleaner()
 
 
     return model, vocab_or_tokenizer, preprocessor, int_to_label, run_cfg
 
-
-def find_latest_run_dir(model_type):
-    """Finds the directory of the latest run for a given model type."""
-    base_model_dir = os.path.join(config.ARTIFACTS_DIR, model_type)
-    if not os.path.isdir(base_model_dir):
-        print(f"Error: Artifact directory for model type '{model_type}' not found at {base_model_dir}")
-        return None
-
-    existing_runs = glob.glob(os.path.join(base_model_dir, "[0-9][0-9][0-9]*"))
-    if not existing_runs:
-        print(f"Error: No completed runs found for model type '{model_type}'.")
-        return None
-
-    latest_run_num = -1
-    latest_run_path = None
-    for run_path in existing_runs:
-        try:
-            run_num = int(os.path.basename(run_path))
-            if run_num > latest_run_num:
-                latest_run_num = run_num
-                latest_run_path = run_path
-        except ValueError:
-            continue # Skip non-numeric dirs
-
-    if latest_run_path:
-        print(f"Found latest run for '{model_type}': {os.path.basename(latest_run_path)}")
-        return latest_run_path
-    else:
-        print(f"Error: Could not determine the latest run for model type '{model_type}'.")
-        return None
-
+# Removed find_latest_run_dir function
 
 # --- Predictor Class ---
 
@@ -219,7 +205,9 @@ class EmotionPredictor:
         else: # Basic Cleaner
             cleaned_text = self.preprocessor.clean(text)
             if self.run_config.MODEL_TYPE != 'Transformer':
-                 return cleaned_text.split() # Simple split for non-transformer vocab
+                 # Simple split for non-transformer vocab
+                 # Ensure consistency with how vocab was built (usually tokenized)
+                 return self.preprocessor.tokenize(cleaned_text) # Use basic cleaner's tokenize
         return cleaned_text # Return cleaned string for Transformer tokenizer
 
     def predict(self, text):
@@ -229,8 +217,10 @@ class EmotionPredictor:
         try:
             with torch.no_grad():
                 if self.run_config.MODEL_TYPE == 'Transformer':
+                    # Ensure input is string for tokenizer
+                    input_text = processed_input if isinstance(processed_input, str) else " ".join(processed_input)
                     encoding = self.vocab_or_tokenizer.encode_plus(
-                        processed_input, # Expects string
+                        input_text,
                         add_special_tokens=True,
                         max_length=self.run_config.MAX_LEN,
                         padding='max_length',
@@ -244,13 +234,26 @@ class EmotionPredictor:
 
                 else: # Non-Transformer models
                     # Expect processed_input to be list of tokens
+                    if not isinstance(processed_input, list):
+                         print(f"Warning: Expected list of tokens for {self.run_config.MODEL_TYPE}, got {type(processed_input)}. Attempting split.")
+                         processed_input = str(processed_input).split()
+
                     numericalized = self.vocab_or_tokenizer.numericalize(processed_input)
-                    truncated = numericalized[:self.run_config.MAX_LEN - 2]
-                    sequence = [config.SOS_IDX] + truncated + [config.EOS_IDX]
-                    sequence_tensor = torch.tensor([sequence], dtype=torch.long).to(self.device) # Add batch dim
-                    lengths = torch.tensor([len(sequence)], dtype=torch.long).to(self.device)
-                    # Pass lengths, model forward should handle it
+                    # Apply padding and SOS/EOS based on how data was prepared for training
+                    # This assumes SOS/EOS were used; adjust if not
+                    max_len_adjusted = self.run_config.MAX_LEN - 2 # Account for SOS/EOS
+                    padded_numericalized = numericalized[:max_len_adjusted]
+                    sequence = [config.SOS_IDX] + padded_numericalized + [config.EOS_IDX]
+
+                    # Pad sequence manually if needed, or rely on model/batching if it handles variable lengths
+                    # For single prediction, simpler to pad here to match MAX_LEN used in training config
+                    padded_sequence = sequence + [config.PAD_IDX] * (self.run_config.MAX_LEN - len(sequence))
+                    sequence_tensor = torch.tensor([padded_sequence], dtype=torch.long).to(self.device) # Add batch dim
+                    lengths = torch.tensor([len(sequence)], dtype=torch.long).to(self.device) # Original length before padding
+
+                    # Pass lengths, model forward should handle it (e.g., pack_padded_sequence)
                     logits = self.model(text_indices=sequence_tensor, sequence_lengths=lengths)
+
 
             probabilities = torch.softmax(logits, dim=1).squeeze()
             probabilities_np = probabilities.cpu().numpy()
@@ -277,6 +280,7 @@ class EmotionPredictor:
 def run_interactive_app(predictor):
     """Handles the interactive command-line loop."""
     print("\n--- Interactive Emotion Prediction ---")
+    print(f"Using model: {predictor.run_config.MODEL_TYPE}")
     print("Enter text to classify, or type 'quit' or 'exit' to stop.")
 
     while True:
@@ -295,7 +299,7 @@ def run_interactive_app(predictor):
                 # Find max score for highlighting
                 max_score = prediction_results[0]['score'] if prediction_results else 0
                 for result in prediction_results:
-                    indicator = " *" if result['score'] == max_score else ""
+                    indicator = " *" if result['score'] == max_score and max_score > 0 else ""
                     print(f"  - {result['label']}: {result['score']:.4f}{indicator}")
             else:
                 print("  Prediction failed.")
@@ -308,26 +312,29 @@ def run_interactive_app(predictor):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive Emotion Prediction App (Loads Latest Run)")
+    parser = argparse.ArgumentParser(description="Interactive Emotion Prediction App (Loads Model)")
     parser.add_argument(
         "--model_type",
         type=str,
         required=True,
         choices=['Transformer', 'CNN_RNN_Attention', 'LSTM'],
-        help="Specify the type of model whose latest run should be loaded."
+        help="Specify the type of model artifacts to load."
     )
     args = parser.parse_args()
 
-    latest_run_dir = find_latest_run_dir(args.model_type)
+    # Construct the path to the model type's artifact directory
+    model_type_dir = os.path.join(config.ARTIFACTS_DIR, args.model_type)
 
-    if not latest_run_dir:
-        print("Exiting.")
+    if not os.path.isdir(model_type_dir):
+        print(f"Error: Artifact directory for model type '{args.model_type}' not found at {model_type_dir}")
+        print("Please ensure the model has been trained first using 'python main.py'.")
         sys.exit(1)
 
-    model, vocab_or_tokenizer, preprocessor, int_to_label, run_cfg = load_prediction_artifacts(latest_run_dir)
+    print(f"Loading artifacts for model type: {args.model_type}")
+    model, vocab_or_tokenizer, preprocessor, int_to_label, run_cfg = load_prediction_artifacts(model_type_dir)
 
     if model is None:
-        print("Failed to load necessary artifacts from the latest run. Exiting.")
+        print("Failed to load necessary artifacts. Exiting.")
         sys.exit(1)
 
     predictor = EmotionPredictor(model, vocab_or_tokenizer, preprocessor, int_to_label, run_cfg)
