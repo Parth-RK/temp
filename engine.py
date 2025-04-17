@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from transformers import get_linear_schedule_with_warmup, AdamW
+from transformers import get_linear_schedule_with_warmup
 from tqdm.auto import tqdm
 import numpy as np
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
@@ -76,7 +76,7 @@ def initialize_optimizer_scheduler(model, optimizer_type, scheduler_type, num_tr
             {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and p.requires_grad],
              'weight_decay': 0.0}
         ]
-        optimizer = AdamW(optimizer_grouped_parameters, lr=config.LEARNING_RATE)
+        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=config.LEARNING_RATE)
     elif optimizer_type == 'Adam':
         optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
     elif optimizer_type == 'SGD':
