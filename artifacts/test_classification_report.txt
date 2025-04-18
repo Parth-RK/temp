@@ -1,0 +1,16 @@
+Test Loss: 0.51399
+Test Accuracy: 76.90%
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0      0.927     0.938     0.932       581
+           1      0.932     0.912     0.922       695
+           2      0.588     0.755     0.661       159
+           3      0.425     0.135     0.204       275
+           4      0.458     0.902     0.608       224
+           5      0.000     0.000     0.000        66
+
+    accuracy                          0.769      2000
+   macro avg      0.555     0.607     0.555      2000
+weighted avg      0.750     0.769     0.740      2000

@@ -10,6 +10,7 @@ import numpy as np
 
 import config
 import data_handler
+from data_handler import load_label_map
 import models
 import engine
 
@@ -39,12 +40,11 @@ def run_training():
     check_nltk_resource('stopwords', 'stopwords')
     check_nltk_resource('wordnet', 'wordnet')
 
-    # --- Load Label Map Separately First (If it exists) ---
     int_to_label_map = None
     if os.path.exists(config.LABEL_MAP_SAVE_PATH):
         try:
-             _, int_to_label_map = data_handler.load_label_mappings(config.LABEL_MAP_SAVE_PATH)
-             print("Loaded existing label map for analysis.")
+            int_to_label_map = load_label_map(config.LABEL_MAP_SAVE_PATH)
+            print("Loaded existing label map for analysis.")
         except Exception as e:
             print(f"Warning: Could not load label map at {config.LABEL_MAP_SAVE_PATH}: {e}")
             int_to_label_map = None

@@ -3,15 +3,7 @@ import os
 import config
 import models
 import data_handler
-
-def load_label_map(label_map_path):
-    import json
-    if not os.path.exists(label_map_path):
-        print(f"Label map file '{label_map_path}' not found. Will print numerical class indices only.")
-        return None
-    with open(label_map_path, 'r') as f:
-        label_map = json.load(f)
-    return {int(k): v for k, v in label_map.items()}
+from data_handler import load_label_map
 
 def load_vocab(vocab_path):
     vocab, _ = data_handler.Vocabulary.load(vocab_path)

@@ -1,10 +1,10 @@
 import torch
 import os
 
-BASE_DIR = "."
-TRAIN_PATH = os.path.join(BASE_DIR, "training.csv")
-VAL_PATH = os.path.join(BASE_DIR, "validation.csv")
-TEST_PATH = os.path.join(BASE_DIR, "test.csv")
+DATA_DIR = "data"
+TRAIN_PATH = os.path.join(DATA_DIR, "training.csv")
+VAL_PATH = os.path.join(DATA_DIR, "validation.csv")
+TEST_PATH = os.path.join(DATA_DIR, "test.csv")
 
 ARTIFACTS_DIR = "artifacts"
 MODEL_SAVE_PATH = os.path.join(ARTIFACTS_DIR, "emotion_model.pt")
@@ -27,13 +27,13 @@ EOS_IDX = 3
 
 MODEL_TYPE = 'LSTM'
 
-EMBEDDING_DIM = 256
-HIDDEN_DIM = 256
+EMBEDDING_DIM = 32
+HIDDEN_DIM = 64
 N_LAYERS = 2
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 32
-EPOCHS = 40
+BATCH_SIZE = 16
+EPOCHS = 5
 LEARNING_RATE_LSTM = 0.005
 SHUFFLE_DATA = True
 
@@ -41,5 +41,5 @@ SPACY_MODEL = "en_core_web_md"
 
 TOP_K_PREDICTIONS = 3
 NUM_WORKERS = 4
-DROPOUT_PROB = 0.3
+DROPOUT_PROB = 0.3 # Prevent overfitting
 WEIGHT_DECAY = 1e-5

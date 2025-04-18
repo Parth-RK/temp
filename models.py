@@ -2,29 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class ANN(nn.Module):
-    def __init__(self, input_size, n_class):
-        super().__init__()
-        print(f"Initializing ANN - WARNING: Input needs embedding or modification for sequence indices.")
-        self.fc1 = nn.Linear(input_size, 128)
-        self.bn1 = nn.BatchNorm1d(128)
-        self.dropout1 = nn.Dropout(0.3)
-        self.fc2 = nn.Linear(128, 64)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.dropout2 = nn.Dropout(0.3)
-        self.fc3 = nn.Linear(64, n_class)
-
-    def forward(self, features):
-        if features.dtype != torch.float32:
-             features = features.float()
-
-        out = F.relu(self.bn1(self.fc1(features)))
-        out = self.dropout1(out)
-        out = F.relu(self.bn2(self.fc2(out)))
-        out = self.dropout2(out)
-        out = self.fc3(out)
-        return out
-
 class LSTMNetwork(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, n_class, n_layers, pad_idx, dropout_prob=0.5):
         super().__init__()
