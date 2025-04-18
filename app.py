@@ -19,7 +19,7 @@ except Exception as e:
     print(f"An unexpected error occurred during imports: {e}")
     sys.exit(1)
 
-# --- Helper Functions ---
+# --- Helper Functions (load_run_config, load_prediction_artifacts - unchanged) ---
 
 def load_run_config(model_type_dir):
     """Loads the specific configuration saved for the Transformer run."""
@@ -101,23 +101,14 @@ def load_prediction_artifacts(model_type_dir):
     # Load Tokenizer
     try:
         print(f"Loading tokenizer: {run_cfg.TRANSFORMER_MODEL_NAME}")
-        # Check if tokenizer files exist locally first (optional optimization)
-        # local_tokenizer_path = os.path.join(model_type_dir, "tokenizer") # If tokenizer was saved locally during training
-        # if os.path.isdir(local_tokenizer_path):
-        #     tokenizer = data_handler.AutoTokenizer.from_pretrained(local_tokenizer_path)
-        #     print("Loaded tokenizer from local artifact directory.")
-        # else:
         tokenizer = data_handler.AutoTokenizer.from_pretrained(run_cfg.TRANSFORMER_MODEL_NAME)
     except Exception as e:
         print(f"Error loading tokenizer '{run_cfg.TRANSFORMER_MODEL_NAME}': {e}")
         return None, None, None, None, None
 
-    # --- Removed Vocabulary Loading ---
-
     # Load Model
     model_path = os.path.join(model_type_dir, "model", config.BEST_MODEL_FILENAME)
     try:
-        # Pass n_classes, model_type is hardcoded to 'Transformer'
         model = engine.load_trained_model(model_path, 'Transformer', n_classes)
     except FileNotFoundError:
         print(f"Error: Trained model file not found at {model_path}")
@@ -126,7 +117,7 @@ def load_prediction_artifacts(model_type_dir):
         print(f"Error loading trained model: {e}")
         return None, None, None, None, None
 
-    # Initialize Preprocessor (should always be 'basic' now)
+    # Initialize Preprocessor
     print(f"Initializing preprocessor: {run_cfg.PREPROCESSOR_TYPE}")
     if run_cfg.PREPROCESSOR_TYPE != 'basic':
          print(f"Warning: Run config specified preprocessor '{run_cfg.PREPROCESSOR_TYPE}', but using 'basic'.")
@@ -134,13 +125,12 @@ def load_prediction_artifacts(model_type_dir):
 
     return model, tokenizer, preprocessor, int_to_label, run_cfg
 
-# --- Removed find_latest_run_dir function ---
 
-# --- Predictor Class (Simplified) ---
+# --- Predictor Class (EmotionPredictor - unchanged) ---
 class EmotionPredictor:
     def __init__(self, model, tokenizer, preprocessor, int_to_label, run_config):
         self.model = model
-        self.tokenizer = tokenizer # Renamed from vocab_or_tokenizer
+        self.tokenizer = tokenizer
         self.preprocessor = preprocessor
         self.int_to_label = int_to_label if int_to_label else {}
         self.run_config = run_config
@@ -151,9 +141,8 @@ class EmotionPredictor:
 
     def _preprocess_input(self, text):
         """Prepares raw text input for the Transformer model."""
-        # Always use basic cleaner
         cleaned_text = self.preprocessor.clean(text)
-        return cleaned_text # Return cleaned string for tokenizer
+        return cleaned_text
 
     def predict(self, text):
         """Predicts emotion probabilities for the input text."""
@@ -161,30 +150,22 @@ class EmotionPredictor:
 
         try:
             with torch.no_grad():
-                # Transformer specific encoding
                 encoding = self.tokenizer.encode_plus(
-                    processed_input_text,
-                    add_special_tokens=True,
-                    max_length=self.run_config.MAX_LEN,
-                    padding='max_length',
-                    truncation=True,
-                    return_attention_mask=True,
-                    return_tensors='pt',
+                    processed_input_text, add_special_tokens=True,
+                    max_length=self.run_config.MAX_LEN, padding='max_length',
+                    truncation=True, return_attention_mask=True, return_tensors='pt',
                 )
                 input_ids = encoding['input_ids'].to(self.device)
                 attention_mask = encoding['attention_mask'].to(self.device)
                 logits = self.model(input_ids=input_ids, attention_mask=attention_mask)
 
-            # --- Removed Non-Transformer Logic ---
-
             probabilities = torch.softmax(logits, dim=1).squeeze()
             probabilities_np = probabilities.cpu().numpy()
 
             results = []
-            # Use len(int_to_label) or logits shape if map is missing
             num_outputs = logits.shape[1]
             for i in range(num_outputs):
-                prob = probabilities_np[i] if i < len(probabilities_np) else 0.0 # Safety check
+                prob = probabilities_np[i] if i < len(probabilities_np) else 0.0
                 label_name = self.int_to_label.get(i, f"Label_{i}")
                 results.append({'label': label_name, 'score': float(prob)})
 
@@ -196,9 +177,52 @@ class EmotionPredictor:
             import traceback; traceback.print_exc()
             return None
 
-# --- Main Application Logic (Simplified) ---
+# --- Main Application Logic ---
+
+def run_demo_evaluation(predictor):
+    """Runs predictions on a predefined set of demo examples."""
+    print("\n===================================")
+    print("=== Running Built-in Examples ===")
+    print("===================================")
+    # Define 10 diverse examples
+    demo_examples = [
+        "I am feeling incredibly happy and excited about the party tonight!", # Joy/Excitement
+        "This movie is making me feel really sad and thoughtful.",           # Sadness
+        "I'm absolutely furious that my flight was cancelled again!",         # Anger
+        "Wow, I did not expect that plot twist at all!",                     # Surprise
+        "Walking alone late at night makes me feel quite anxious.",           # Fear/Anxiety
+        "I just love the way the sun sets over the ocean.",                  # Love/Joy/Awe
+        "He seemed quite indifferent to the news.",                          # Neutral/Indifference (depends on labels)
+        "This complex puzzle is incredibly frustrating!",                    # Anger/Frustration
+        "I feel so calm and peaceful listening to this music.",              # Calm/Joy
+        "The project deadline is approaching very quickly."                  # Neutral/Stress (depends on labels)
+    ]
+
+    for i, text in enumerate(demo_examples):
+        print(f"\nExample {i+1}/{len(demo_examples)}: '{text}'")
+        results = predictor.predict(text) # Get list of {'label': score} dicts
+
+        if results:
+            # Display the top prediction clearly
+            top_result = results[0]
+            print(f"  --> Predicted: {top_result['label']} (Score: {top_result['score']:.4f})")
+
+            # Optionally show the next few predictions if desired
+            # if len(results) > 1:
+            #     print("      --- Top 3 ---")
+            #     for res in results[:3]:
+            #         print(f"      {res['label']}: {res['score']:.4f}")
+        else:
+            print("  --> Prediction failed for this example.")
+
+    print("\n===================================")
+    print("=== Built-in Examples Finished ===")
+    print("===================================")
+
+
 def run_interactive_app(predictor):
-    print("\n--- Interactive Emotion Prediction (Transformer) ---")
+    """Handles the interactive command-line loop."""
+    print("\n--- Interactive Emotion Prediction ---")
     print(f"Using model: {predictor.run_config.TRANSFORMER_MODEL_NAME}")
     print("Enter text to classify, or type 'quit' or 'exit' to stop.")
 
@@ -221,16 +245,15 @@ def run_interactive_app(predictor):
         except (EOFError, KeyboardInterrupt): print("\nExiting."); break
         except Exception as e: print(f"An unexpected error occurred in the loop: {e}")
 
+
 def main():
     parser = argparse.ArgumentParser(description="Interactive Emotion Prediction App (Transformer)")
-    # Model type is fixed, no need for argument
-    # Optionally allow specifying artifact dir directly if needed, but default is good
+    # No arguments needed for this simplified version, unless you want to specify artifact dir
     # parser.add_argument("--artifact_dir", type=str, default=config.MODEL_TYPE_ARTIFACTS_DIR,
     #                     help="Path to the Transformer artifact directory.")
     args = parser.parse_args()
 
-    # Construct the fixed path to the Transformer artifact directory
-    model_type_dir = config.MODEL_TYPE_ARTIFACTS_DIR # Uses config.MODEL_TYPE which is 'Transformer'
+    model_type_dir = config.MODEL_TYPE_ARTIFACTS_DIR
 
     if not os.path.isdir(model_type_dir):
         print(f"Error: Artifact directory for Transformer not found at {model_type_dir}")
@@ -244,8 +267,15 @@ def main():
         print("Failed to load necessary artifacts (model/tokenizer). Exiting.")
         sys.exit(1)
 
+    # Initialize the predictor
     predictor = EmotionPredictor(model, tokenizer, preprocessor, int_to_label, run_cfg)
+
+    # *** Run the built-in demo examples ***
+    run_demo_evaluation(predictor)
+
+    # Proceed to interactive mode after demos
     run_interactive_app(predictor)
+
 
 if __name__ == "__main__":
     main()
