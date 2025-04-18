@@ -23,7 +23,7 @@ It's a full pipeline: Slap in your data, tweak some configs, hit `main.py`, and 
 Fire up `python app.py` post-training and you'll see something like this before the interactive prompt:
 
 ===================================
-=== Running Built-in Examples ===
+ Running Built-in Examples
 ===================================
 
 Example 1/10: 'I am feeling incredibly happy and excited about the party tonight!'
