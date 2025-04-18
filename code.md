@@ -24,7 +24,7 @@ Fire up `python app.py` post-training and you'll see something like this before 
 
 ===================================
  Running Built-in Examples
-===================================
+
 
 Example 1/10: 'I am feeling incredibly happy and excited about the party tonight!'
   --> Predicted: joy (Score: 0.9876)  # Nice!
@@ -34,16 +34,14 @@ Example 2/10: 'This movie is making me feel really sad and thoughtful.'
 
 ... (more examples) ...
 
-===================================
-=== Built-in Examples Finished ===
-===================================
-
+ Built-in Examples Finished 
+ 
 --- Interactive Emotion Prediction ---
 Using model: nreimers/MiniLM-L6-H384-uncased
 Enter text to classify, or type 'quit' or 'exit' to stop.
 
 Enter text: _ # Your turn!
-```
+
 
 ## 🛠️ Get It Running (Setup)
 
@@ -127,15 +125,3 @@ MIT. Do what you want, just don't blame me if your AI becomes sentient and judge
 
 *   Hugging Face 🤗 - Absolute legends.
 *   PyTorch Crew 🔥
-```
-
-**Key "Fireship" elements incorporated:**
-
-*   **Energetic Language:** "Turbo-charges," "sniff out emotions," "digital bloodhound," "slap in your data," "BOOM," "fine-tuned emotion classification model ready to roll," "bend it to your emotional will," "go wild," "instant gratification," "Train the Beast," "Talk to Your AI," "probe its digital soul," "fine-tune like crazy," "absolute legends."
-*   **Emojis:** Used strategically for emphasis and visual breaks (🔥, 🚀, ✨, 🛠️, ⚙️, 📊, ✂️, 📈, 🔬, 📦, 💬, ⚠️, 🙏, 🤗).
-*   **Conciseness:** Tried to keep explanations brief and to the point.
-*   **Slight Irreverence/Humor:** "profit? (Okay, maybe just predictions)," "AI therapist (disclaimer: not actual therapy)," "don't blame me if your AI becomes sentient..."
-*   **Action-Oriented:** Focuses on what the user can *do*.
-*   **Modern References:** Hugging Face, Transformers, Pipelines.
-
-It maintains the core professional information (setup steps, config guidance, usage) but wraps it in a more engaging and distinctive tone. Let me know if you want any specific parts tweaked further!
