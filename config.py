@@ -65,7 +65,8 @@ PREPROCESSOR_TYPE = 'basic'
 # Removed Spacy/NLTK related settings (SPACY_MODEL_NAME, REMOVE_STOPWORDS)
 
 # --- Transformer Model Specific ---
-TRANSFORMER_MODEL_NAME = "distilbert-base-uncased" # Or any other HuggingFace model
+# TRANSFORMER_MODEL_NAME = "distilbert-base-uncased" # OR
+TRANSFORMER_MODEL_NAME = "MiniLM-L6-H384-uncased" 
 
 # --- Removed RNN/CNN Model Specific Settings ---
 # EMBEDDING_DIM, VOCAB_MIN_FREQ, CNN_*, RNN_*, DROPOUT_PROB, PAD/UNK/SOS/EOS removed
