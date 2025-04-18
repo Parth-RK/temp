@@ -47,13 +47,32 @@ class TransformerClassifier(nn.Module):
              traceback.print_exc()
              sys.exit(1)
 
-        dropout_prob = getattr(self.config, 'classifier_dropout',
-                               getattr(self.config, 'hidden_dropout_prob', 0.1))
-        self.dropout = nn.Dropout(dropout_prob)
+        clf_dropout = getattr(self.config, 'classifier_dropout', None)
+        hidden_dropout = getattr(self.config, 'hidden_dropout_prob', None)
+
+        if clf_dropout is not None:
+            # Prioritize classifier_dropout if it's explicitly set and not None
+            dropout_prob = clf_dropout
+            print(f"  Using classifier_dropout: {dropout_prob:.2f}")
+        elif hidden_dropout is not None:
+            # Fallback to hidden_dropout_prob if it's set and not None
+            dropout_prob = hidden_dropout
+            print(f"  Using hidden_dropout_prob: {dropout_prob:.2f}")
+        else:
+            # Final fallback if neither is found or both are None
+            dropout_prob = 0.1
+            print(f"  Using default dropout: {dropout_prob:.2f}")
+
+        # Ensure dropout_prob is a valid float before passing to nn.Dropout
+        if not isinstance(dropout_prob, (float, int)):
+            print(f"Warning: Invalid dropout value ({dropout_prob}). Resetting to default 0.1.")
+            dropout_prob = 0.1
+
+        self.dropout = nn.Dropout(float(dropout_prob)) # Cast to float for safety
         self.classifier = nn.Linear(self.config.hidden_size, n_classes)
 
         print(f"  TransformerClassifier using '{model_name}' initialized.")
-        print(f"  Using hidden size: {self.config.hidden_size}, Dropout: {dropout_prob:.2f}")
+        print(f"  Using hidden size: {self.config.hidden_size}") # Print dropout separately above
 
     def forward(self, input_ids, attention_mask):
         """
