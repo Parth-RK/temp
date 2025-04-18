@@ -167,7 +167,7 @@ def run_training():
 
     optimizer = optim.AdamW(model.parameters(), lr=config.LEARNING_RATE_LSTM, weight_decay=config.WEIGHT_DECAY)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX)
+    criterion = nn.CrossEntropyLoss()
 
     print(f"Model:\n{model}")
     print(f"Optimizer: {optimizer}")
