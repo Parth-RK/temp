@@ -66,7 +66,7 @@ PREPROCESSOR_TYPE = 'basic'
 
 # --- Transformer Model Specific ---
 # TRANSFORMER_MODEL_NAME = "distilbert-base-uncased" # OR
-TRANSFORMER_MODEL_NAME = "MiniLM-L6-H384-uncased" 
+TRANSFORMER_MODEL_NAME = "nreimers/MiniLM-L6-H384-uncased" 
 
 # --- Removed RNN/CNN Model Specific Settings ---
 # EMBEDDING_DIM, VOCAB_MIN_FREQ, CNN_*, RNN_*, DROPOUT_PROB, PAD/UNK/SOS/EOS removed
