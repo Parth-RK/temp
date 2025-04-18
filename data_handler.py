@@ -219,6 +219,14 @@ def save_label_map(int_to_label, filepath):
     with open(filepath, 'w') as f:
         json.dump(str_keyed_map, f, indent=4)
     print(f"Label map saved to {filepath}")
+def load_label_map(label_map_path):
+    import json
+    if not os.path.exists(label_map_path):
+        print(f"Label map file '{label_map_path}' not found. Will print numerical class indices only.")
+        return None
+    with open(label_map_path, 'r') as f:
+        label_map = json.load(f)
+    return {int(k): v for k, v in label_map.items()}
 
 def load_and_prepare_data(train_path, val_path, test_path, label_map_save_path):
     try:
