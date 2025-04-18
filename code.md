@@ -1,8 +1,4 @@
-Okay, let's inject some Fireship energy into that README! Think concise, high-impact, maybe a *little* bit edgy, and definitely using those essential emojis. 🔥
 
-Here's a draft aiming for that style while keeping the necessary professional info:
-
-```markdown
 # Emotion Analysis Engine 🔥
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -26,7 +22,6 @@ It's a full pipeline: Slap in your data, tweak some configs, hit `main.py`, and 
 
 Fire up `python app.py` post-training and you'll see something like this before the interactive prompt:
 
-```
 ===================================
 === Running Built-in Examples ===
 ===================================
