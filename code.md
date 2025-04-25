@@ -1,6 +1,5 @@
 # Biology Notes Reference
 
-This document provides a high-level summary and links to the detailed biology notes available in the repository. The notes cover various subjects ranging from diversity in the living world to biotechnology and ecology.
 
 ## Table of Contents
 
