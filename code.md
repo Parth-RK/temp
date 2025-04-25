@@ -1,5 +1,3 @@
-Okay, here is the information formatted with clear Unit and Chapter headings using markdown for better readability.
-
 ***
 
 ## UNIT 1: Diversity in Living World
