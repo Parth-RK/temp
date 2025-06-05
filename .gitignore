@@ -1,4 +1,8 @@
 __pycache__/
-*.pt
-vocab.json
 .vscode/
+.gradio/
+models/
+venv/
+vocab.json
+*.pt
+*.bin
